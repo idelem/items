@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>流水账</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div id="app">
+    <nav id="nav">
+      <button class="nav-btn active" data-view="timeline">流水</button>
+      <button class="nav-btn" data-view="tags">标签</button>
+      <button class="nav-btn" data-view="wishlist">种草</button>
+    </nav>
+
+    <!-- Timeline View -->
+    <div id="view-timeline" class="view active">
+      <div id="month-header">
+        <button id="prev-month">‹</button>
+        <span id="month-label"></span>
+        <button id="next-month">›</button>
+      </div>
+      <div id="month-summary" class="summary-bar"></div>
+      <div id="timeline-list"></div>
+
+      <!-- New Entry Input -->
+      <div id="entry-composer">
+        <div id="composer-controls">
+          <button id="type-toggle" class="type-btn expense" title="切换收入/支出">－</button>
+          <label class="wishlist-label">
+            <input type="checkbox" id="wishlist-toggle"> 种草
+          </label>
+        </div>
+        <div id="input-wrap">
+          <div
+            id="entry-input"
+            contenteditable="true"
+            spellcheck="false"
+            data-placeholder="记一笔… 用 # 标记商品，数字自动识别为金额"
+          ></div>
+          <div id="autocomplete-menu" class="hidden"></div>
+        </div>
+        <button id="submit-btn">↵</button>
+      </div>
+    </div>
+
+    <!-- Tags View -->
+    <div id="view-tags" class="view">
+      <div id="tag-tree"></div>
+    </div>
+
+    <!-- Wishlist View -->
+    <div id="view-wishlist" class="view">
+      <div id="wishlist-list"></div>
+    </div>
+
+    <!-- Tag Detail Panel -->
+    <div id="tag-detail" class="panel hidden">
+      <button id="tag-detail-back">← 返回</button>
+      <h2 id="tag-detail-name" contenteditable="true" spellcheck="false"></h2>
+      <div id="tag-detail-summary" class="summary-bar"></div>
+      <div id="tag-detail-entries"></div>
+      <div id="tag-entry-composer">
+        <div id="tag-composer-controls">
+          <button class="type-btn expense tag-type-toggle" title="切换收入/支出">－</button>
+          <label class="wishlist-label">
+            <input type="checkbox" class="tag-wishlist-toggle"> 种草
+          </label>
+        </div>
+        <div id="tag-input-wrap">
+          <div
+            class="tag-entry-input"
+            contenteditable="true"
+            spellcheck="false"
+            data-placeholder="在此记录…"
+          ></div>
+          <div class="tag-autocomplete-menu hidden"></div>
+        </div>
+        <button class="tag-submit-btn">↵</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
