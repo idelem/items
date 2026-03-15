@@ -37,18 +37,17 @@
       <div id="month-summary" class="summary-bar"></div>
       <div id="timeline-list"></div>
       <div id="entry-composer">
-        <div id="composer-controls">
-          <button id="type-toggle" class="type-btn expense">－</button>
-          <label class="wishlist-label">
-            <input type="checkbox" id="wishlist-toggle">
-            <i data-lucide="heart" class="heart-icon"></i>
-          </label>
-        </div>
+        <button id="type-toggle" class="type-btn expense">－</button>
+        <label class="wishlist-label">
+          <input type="checkbox" id="wishlist-toggle">
+          <i data-lucide="heart" class="heart-icon"></i>
+        </label>
         <div id="input-wrap">
           <div id="entry-input" contenteditable="true" spellcheck="false"
             data-placeholder="记一笔… # 商品  @ 地点  数字=金额  *N/N=评分  %N=进度"></div>
           <div id="autocomplete-menu" class="hidden"></div>
         </div>
+        <button id="bracket-btn" class="composer-aux-btn" title="插入括号标签 #()">#<span class="bracket-hint">()</span></button>
         <button id="submit-btn"><i data-lucide="corner-down-left"></i></button>
       </div>
     </div>
@@ -81,18 +80,17 @@
         <div id="detail-summary" class="summary-bar"></div>
         <div id="detail-entries"></div>
         <div id="detail-composer">
-          <div id="detail-composer-controls">
-            <button class="type-btn expense detail-type-toggle">－</button>
-            <label class="wishlist-label">
-              <input type="checkbox" class="detail-wishlist-toggle">
-              <i data-lucide="heart" class="heart-icon"></i>
-            </label>
-          </div>
+          <button class="type-btn expense detail-type-toggle">－</button>
+          <label class="wishlist-label">
+            <input type="checkbox" class="detail-wishlist-toggle">
+            <i data-lucide="heart" class="heart-icon"></i>
+          </label>
           <div id="detail-input-wrap">
             <div class="detail-entry-input" contenteditable="true" spellcheck="false"
               data-placeholder="在此记录…"></div>
             <div class="detail-autocomplete-menu hidden"></div>
           </div>
+          <button class="detail-bracket-btn composer-aux-btn" title="插入括号标签 #()">#<span class="bracket-hint">()</span></button>
           <button class="detail-submit-btn"><i data-lucide="corner-down-left"></i></button>
         </div>
       </div>

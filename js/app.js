@@ -7,7 +7,8 @@ import { renderTimeline, renderTree,
          renderWishlist, openDetail,
          renderDetailEntries,
          initDetailRename, initDetailComposer,
-         handleAC, hideAC, moveAC, applyAC }  from './views.js';
+         handleAC, hideAC, moveAC, applyAC,
+         insertBracketTemplate }              from './views.js';
 import { seedIfEmpty }                        from './seed.js';
 
 // ─── switchView (defined here so entries.js can call it via callback) ─────────
@@ -72,7 +73,8 @@ entryInput.addEventListener('keydown', e => {
     if (e.key === 'ArrowUp')   { e.preventDefault(); moveAC(-1, acMenu); return; }
     if ((e.key === 'Enter' || e.key === 'Tab') && acMenu.querySelector('.selected')) {
       e.preventDefault();
-      applyAC(acMenu.querySelector('.selected').dataset.value, entryInput, acMenu);
+      const sel = acMenu.querySelector('.selected');
+      applyAC(sel.dataset.value, entryInput, acMenu, sel.dataset.bracketed === 'true');
       return;
     }
     if (e.key === 'Escape') { hideAC(acMenu); return; }
@@ -80,6 +82,10 @@ entryInput.addEventListener('keydown', e => {
   if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); submitMainEntry(); }
 });
 submitBtn.addEventListener('click', submitMainEntry);
+
+document.getElementById('bracket-btn').addEventListener('click', () => {
+  insertBracketTemplate(entryInput, '#');
+});
 
 function submitMainEntry() {
   const raw = entryInput.innerText.trim();

@@ -1,5 +1,5 @@
 import { escapeHtml } from './db.js';
-import { _N, _UN, progressRe, parseProgress } from './parse.js';
+import { _N, _UN, progressRe, parseProgress, pathToRaw } from './parse.js';
 
 // ─── Stars ────────────────────────────────────────────────────────────────────
 export function renderStars(rating, scale) {
@@ -24,15 +24,28 @@ export function renderProgressToken(p) {
   );
 }
 
+// ─── Sigil token scanner ──────────────────────────────────────────────────────
+// Matches #(path with spaces) and #plainpath, returns {start,end,path}
+function scanSigilTokens(raw, sigil) {
+  const esc = sigil.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const re  = new RegExp(`${esc}(?:\\(([^)]+)\\)|([\\w\\u4e00-\\u9fa5/\\-_.·]+))`, 'g');
+  const results = [];
+  for (const m of raw.matchAll(re)) {
+    const path = m[1] !== undefined ? m[1].trim() : m[2];
+    results.push({ start: m.index, end: m.index + m[0].length, path });
+  }
+  return results;
+}
+
 // ─── Full token rendering ─────────────────────────────────────────────────────
 export function renderTokens(raw, type) {
   const parts = [];
 
-  for (const m of raw.matchAll(/#([\w\u4e00-\u9fa5/\-_.·]+)/g))
-    parts.push({ start: m.index, end: m.index + m[0].length, kind: 'tag', value: m[1] });
+  for (const { start, end, path } of scanSigilTokens(raw, '#'))
+    parts.push({ start, end, kind: 'tag', path });
 
-  for (const m of raw.matchAll(/@([\w\u4e00-\u9fa5/\-_.·]+)/g))
-    parts.push({ start: m.index, end: m.index + m[0].length, kind: 'place', value: m[1] });
+  for (const { start, end, path } of scanSigilTokens(raw, '@'))
+    parts.push({ start, end, kind: 'place', path });
 
   for (const m of raw.matchAll(/\*(\d+(?:\.\d+)?)\/(\d+(?:\.\d+)?)/g))
     parts.push({
@@ -46,10 +59,15 @@ export function renderTokens(raw, type) {
   }
 
   // Mask all special tokens before scanning for bare prices
-  const masked = raw
-    .replace(/[#@][\w\u4e00-\u9fa5/\-_.·]+/g, s => ' '.repeat(s.length))
-    .replace(/\*\d+(?:\.\d+)?\/\d+(?:\.\d+)?/g, s => ' '.repeat(s.length))
-    .replace(progressRe(), s => ' '.repeat(s.length));
+  let masked = raw;
+  // Replace each special span with spaces of equal byte length
+  const allSpans = parts.map(p => ({ start: p.start, end: p.end }));
+  allSpans.sort((a, b) => a.start - b.start);
+  let maskArr = raw.split('');
+  allSpans.forEach(({ start, end }) => {
+    for (let i = start; i < end; i++) maskArr[i] = ' ';
+  });
+  masked = maskArr.join('');
 
   for (const m of masked.matchAll(/(?:^|\s)(\d+(?:\.\d+)?)(?=\s|$)/g)) {
     const ns = m.index + m[0].length - m[1].length;
@@ -65,10 +83,10 @@ export function renderTokens(raw, type) {
     out += escapeHtml(raw.slice(last, p.start));
     switch (p.kind) {
       case 'tag':
-        out += `<a class="token-tag" data-sigil="#" data-path="${escapeHtml(p.value)}">#${escapeHtml(p.value)}</a>`;
+        out += `<a class="token-tag" data-sigil="#" data-path="${escapeHtml(p.path)}">#${escapeHtml(p.path)}</a>`;
         break;
       case 'place':
-        out += `<a class="token-place" data-sigil="@" data-path="${escapeHtml(p.value)}">@${escapeHtml(p.value)}</a>`;
+        out += `<a class="token-place" data-sigil="@" data-path="${escapeHtml(p.path)}">@${escapeHtml(p.path)}</a>`;
         break;
       case 'rating':
         out += `<a class="token-rating" data-sigil="*" data-path="${escapeHtml(p.str)}">` +
@@ -114,8 +132,10 @@ export function summaryHTML({ income, expense }) {
 // ─── Autocomplete highlight ───────────────────────────────────────────────────
 export function highlightMatch(path, query) {
   if (!query) return escapeHtml(path);
+  // Strip brackets from query for highlight matching
+  const cleanQuery = query.replace(/^\(/, '').trim();
   let r = escapeHtml(path);
-  query.toLowerCase().split(/\s+/).filter(Boolean).forEach(t => {
+  cleanQuery.toLowerCase().split(/\s+/).filter(Boolean).forEach(t => {
     r = r.replace(new RegExp('(' + t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + ')', 'gi'), '<mark>$1</mark>');
   });
   return r;

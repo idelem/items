@@ -261,37 +261,53 @@ body {
 .entry-delete-btn:hover { color: var(--expense); background: var(--expense-light); }
 
 /* ── COMPOSER ── */
-#entry-composer {
+#entry-composer, #detail-composer {
   position: fixed; bottom: 0; left: 50%; transform: translateX(-50%);
   width: 100%; max-width: 640px; background: var(--surface);
-  border-top: 1px solid var(--border); padding: 10px 16px 14px;
-  display: flex; flex-direction: column; gap: 8px;
-  z-index: 200; box-shadow: 0 -4px 20px rgba(0,0,0,0.06);
+  border-top: 1px solid var(--border); padding: 8px 12px 12px;
+  display: flex; flex-direction: row; align-items: flex-end; gap: 6px;
+  box-shadow: 0 -4px 20px rgba(0,0,0,0.06);
 }
-#composer-controls, #detail-composer-controls {
-  display: flex; align-items: center; gap: 10px;
-}
+#entry-composer  { z-index: 200; }
+#detail-composer { z-index: 600; }
+
+#composer-controls, #detail-composer-controls { display: contents; }
+
 .type-btn {
   width: 28px; height: 28px; border-radius: 50%;
   border: 1.5px solid var(--expense); background: none; color: var(--expense);
   font-size: 18px; cursor: pointer; display: flex; align-items: center;
-  justify-content: center; transition: all 0.15s; font-family: var(--mono); line-height: 1; flex-shrink: 0;
+  justify-content: center; transition: all 0.15s; font-family: var(--mono);
+  line-height: 1; flex-shrink: 0; margin-bottom: 4px;
 }
 .type-btn.income { border-color: var(--income); color: var(--income); }
+
 .wishlist-label {
   display: flex; align-items: center; gap: 5px; font-size: 13px;
   color: var(--text-muted); cursor: pointer; user-select: none;
+  flex-shrink: 0; margin-bottom: 4px;
 }
 .wishlist-label input { display: none; }
 .heart-icon { width: 16px; height: 16px; transition: color 0.12s, fill 0.12s; }
 .wishlist-label:has(input:checked) .heart-icon { color: var(--wishlist); fill: var(--wishlist); }
 
-#input-wrap, #detail-input-wrap { position: relative; display: flex; gap: 8px; align-items: flex-start; }
+.composer-aux-btn {
+  background: none; border: 1px solid var(--border); border-radius: var(--radius);
+  color: var(--text-muted); font-family: var(--mono); font-size: 12px;
+  padding: 0 6px; height: 28px; cursor: pointer; flex-shrink: 0;
+  display: flex; align-items: center; transition: all 0.12s;
+  margin-bottom: 4px; white-space: nowrap;
+}
+.composer-aux-btn:hover { border-color: var(--tag-fg); color: var(--tag-fg); }
+.bracket-hint { opacity: 0.45; font-size: 11px; }
+
+#input-wrap, #detail-input-wrap { position: relative; flex: 1; min-width: 0; }
 #entry-input, .detail-entry-input {
-  flex: 1; min-height: 36px; max-height: 100px; overflow-y: auto;
+  width: 100%; min-height: 36px; max-height: 100px; overflow-y: auto;
   padding: 6px 10px; background: var(--bg); border: 1px solid var(--border);
   border-radius: var(--radius); outline: none; font-family: var(--serif);
   font-size: 15px; line-height: 1.5; word-break: break-word; transition: border-color 0.15s;
+  display: block;
 }
 #entry-input:focus, .detail-entry-input:focus { border-color: var(--accent); background: var(--surface); }
 #entry-input:empty::before, .detail-entry-input:empty::before {

@@ -1,6 +1,6 @@
 import { DB, escapeHtml, genId }             from './db.js';
 import { parseEntry, ensureItems, renameItem,
-         getSuggestions }                      from './parse.js';
+         getSuggestions, pathToRaw }           from './parse.js';
 import { renderTokens, renderStars,
          summarize, summaryHTML, highlightMatch } from './render.js';
 import { buildEntryEl }                        from './entries.js';
@@ -258,6 +258,7 @@ export function initDetailComposer() {
   const input      = document.querySelector('.detail-entry-input');
   const acMenu     = document.querySelector('.detail-autocomplete-menu');
   const submitBtn  = document.querySelector('.detail-submit-btn');
+  const bracketBtn = document.querySelector('.detail-bracket-btn');
 
   typeBtn.addEventListener('click', () => {
     state.detailTypeVal = state.detailTypeVal === 'expense' ? 'income' : 'expense';
@@ -276,7 +277,8 @@ export function initDetailComposer() {
       if (e.key === 'ArrowUp')   { e.preventDefault(); moveAC(-1, acMenu); return; }
       if ((e.key === 'Enter' || e.key === 'Tab') && acMenu.querySelector('.selected')) {
         e.preventDefault();
-        applyAC(acMenu.querySelector('.selected').dataset.value, input, acMenu);
+        const sel = acMenu.querySelector('.selected');
+        applyAC(sel.dataset.value, input, acMenu, sel.dataset.bracketed === 'true');
         return;
       }
       if (e.key === 'Escape') { hideAC(acMenu); return; }
@@ -286,10 +288,16 @@ export function initDetailComposer() {
 
   submitBtn.addEventListener('click', submitDetailEntry);
 
+  bracketBtn?.addEventListener('click', () => insertBracketTemplate(input, '#'));
+
   function submitDetailEntry() {
     let raw = input.innerText.trim();
     if (!raw) return;
-    const marker = state.detailSigil + state.detailPath;
+    // Build the marker in correct raw form (bracket if path has spaces)
+    const isTagOrPlace = state.detailSigil === '#' || state.detailSigil === '@';
+    const marker = isTagOrPlace
+      ? pathToRaw(state.detailSigil, state.detailPath)
+      : state.detailSigil + state.detailPath;
     if (!raw.includes(marker)) raw = marker + ' ' + raw;
     const p = parseEntry(raw);
     ensureItems('tags', p.tags);
@@ -309,6 +317,9 @@ export function initDetailComposer() {
 // ─── Autocomplete (shared) ────────────────────────────────────────────────────
 let _acIndex = -1;
 
+// Returns { sigil, query, bracketed } where:
+//   bracketed=true  means caret is inside #(...)  → query is text after '('
+//   bracketed=false means caret is after plain #   → query is text after '#'
 function getCaretSigilQuery(el) {
   const sel = window.getSelection();
   if (!sel.rangeCount) return null;
@@ -317,9 +328,16 @@ function getCaretSigilQuery(el) {
   pre.selectNodeContents(el);
   pre.setEnd(range.startContainer, range.startOffset);
   const text = pre.toString();
-  const m    = text.match(/[#@]([\w\u4e00-\u9fa5/\-_.·]*)$/);
-  if (!m) return null;
-  return { sigil: text[m.index], query: m[1] };
+
+  // Check for bracketed form: #( or @(  with no closing ) yet
+  const bracketM = text.match(/([#@])\(([^)]*)$/);
+  if (bracketM) return { sigil: bracketM[1], query: bracketM[2], bracketed: true };
+
+  // Plain form: #word  or  @word
+  const plainM = text.match(/([#@])([\w\u4e00-\u9fa5/\-_.·]*)$/);
+  if (plainM) return { sigil: plainM[1], query: plainM[2], bracketed: false };
+
+  return null;
 }
 
 export function handleAC(inputEl, menuEl) {
@@ -336,12 +354,13 @@ export function handleAC(inputEl, menuEl) {
 
   suggestions.forEach(s => {
     const item = document.createElement('div');
-    item.className    = `autocomplete-item ${cls}`;
-    item.dataset.value = hit.sigil + s;
-    item.innerHTML    = escapeHtml(hit.sigil) + highlightMatch(s, hit.query);
+    item.className     = `autocomplete-item ${cls}`;
+    item.dataset.value    = hit.sigil + s;
+    item.dataset.bracketed = String(hit.bracketed);
+    item.innerHTML     = escapeHtml(hit.sigil) + highlightMatch(s, hit.query);
     item.addEventListener('mousedown', e => {
       e.preventDefault();
-      applyAC(hit.sigil + s, inputEl, menuEl);
+      applyAC(hit.sigil + s, inputEl, menuEl, hit.bracketed);
     });
     menuEl.appendChild(item);
   });
@@ -360,7 +379,14 @@ export function moveAC(dir, menuEl) {
   items[_acIndex]?.classList.add('selected');
 }
 
-export function applyAC(fullValue, inputEl, menuEl) {
+// fullValue: '#my fav/item' or '#plainpath'
+// bracketed: whether caret was inside #(...)
+export function applyAC(fullValue, inputEl, menuEl, bracketed) {
+  const sigil = fullValue[0];
+  const path  = fullValue.slice(1);
+  // Choose raw form: if path has spaces it MUST be bracketed
+  const rawToken = path.includes(' ') ? `${sigil}(${path})` : `${sigil}${path}`;
+
   const sel = window.getSelection();
   if (!sel.rangeCount) return;
   const range = sel.getRangeAt(0);
@@ -368,16 +394,24 @@ export function applyAC(fullValue, inputEl, menuEl) {
   pre.selectNodeContents(inputEl);
   pre.setEnd(range.startContainer, range.startOffset);
   const preText = pre.toString();
-  const m = preText.match(/[#@][\w\u4e00-\u9fa5/\-_.·]*$/);
+
+  // Find where the current #... or #(... token starts
+  const m = bracketed
+    ? preText.match(/[#@]\([^)]*$/)
+    : preText.match(/[#@][\w\u4e00-\u9fa5/\-_.·]*$/);
   if (!m) return;
 
   const fullText  = inputEl.innerText;
   const insertPos = preText.length - m[0].length;
-  const postText  = fullText.slice(preText.length);
-  const newText   = fullText.slice(0, insertPos) + fullValue + (postText.startsWith(' ') ? '' : ' ') + postText;
+  let   postText  = fullText.slice(preText.length);
+
+  // If we were inside a bracket form, consume the closing ')' if present
+  if (bracketed && postText.startsWith(')')) postText = postText.slice(1);
+
+  const newText = fullText.slice(0, insertPos) + rawToken + (postText.startsWith(' ') ? '' : ' ') + postText;
   inputEl.innerText = newText;
 
-  const newPos = insertPos + fullValue.length + 1;
+  const newPos = insertPos + rawToken.length + 1;
   try {
     const tn = inputEl.firstChild;
     if (tn) {
@@ -390,4 +424,38 @@ export function applyAC(fullValue, inputEl, menuEl) {
   } catch (_) {}
 
   hideAC(menuEl);
+}
+// ─── Bracket template insertion ───────────────────────────────────────────────
+// Inserts sigil+() at the caret and places the cursor between the brackets,
+// then triggers autocomplete. Used by both main and detail composers.
+export function insertBracketTemplate(inputEl, sigil) {
+  inputEl.focus();
+  const sel = window.getSelection();
+  if (!sel.rangeCount) return;
+
+  const text  = inputEl.innerText;
+  const range = sel.getRangeAt(0);
+  const pre   = range.cloneRange();
+  pre.selectNodeContents(inputEl);
+  pre.setEnd(range.startContainer, range.startOffset);
+  const preLen = pre.toString().length;
+
+  const insert  = sigil + '()';
+  inputEl.innerText = text.slice(0, preLen) + insert + text.slice(preLen);
+
+  // Place caret between the brackets: after sigil and '('
+  const caretPos = preLen + sigil.length + 1;
+  try {
+    const tn = inputEl.firstChild;
+    if (tn) {
+      const r = document.createRange();
+      r.setStart(tn, Math.min(caretPos, tn.length));
+      r.collapse(true);
+      sel.removeAllRanges();
+      sel.addRange(r);
+    }
+  } catch (_) {}
+
+  // Trigger autocomplete immediately
+  inputEl.dispatchEvent(new Event('input'));
 }
