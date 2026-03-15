@@ -23,21 +23,23 @@ function escapeHtml(s) {
 }
 
 // ─── Parse ──────────────────────────────────────────────────────────────────
-const TAG_RE   = /#([\w\u4e00-\u9fa5/\-_.·]+)/g;
-const PLACE_RE = /@([\w\u4e00-\u9fa5/\-_.·]+)/g;
-const SIGIL_RE = /[#@]([\w\u4e00-\u9fa5/\-_.·]+)/g;
+const TAG_RE    = /#([\w\u4e00-\u9fa5/\-_.·]+)/g;
+const PLACE_RE  = /@([\w\u4e00-\u9fa5/\-_.·]+)/g;
+const SIGIL_RE  = /[#@]([\w\u4e00-\u9fa5/\-_.·]+)/g;
+const RATING_RE = /\*(\d+(?:\.\d+)?)\/(\d+(?:\.\d+)?)/g;
 
 function parseEntry(raw) {
-  const tags   = [...raw.matchAll(TAG_RE)].map(m => m[1]);
-  const places = [...raw.matchAll(PLACE_RE)].map(m => m[1]);
+  const tags    = [...raw.matchAll(TAG_RE)].map(m => m[1]);
+  const places  = [...raw.matchAll(PLACE_RE)].map(m => m[1]);
+  const ratings = [...raw.matchAll(RATING_RE)].map(m => ({ rating: parseFloat(m[1]), scale: parseFloat(m[2]), str: m[0].slice(1) }));
 
-  const stripped = raw.replace(SIGIL_RE, '');
+  const stripped = raw.replace(SIGIL_RE, '').replace(RATING_RE, '');
   const priceMatch = stripped.match(/(?:^|\s)(\d+(?:\.\d+)?)(?=\s|$)/);
   const price = priceMatch ? parseFloat(priceMatch[1]) : null;
 
   const note = stripped.replace(/(?:^|\s)\d+(?:\.\d+)?(?=\s|$)/g, '').trim();
 
-  return { price, tags, places, note };
+  return { price, tags, places, ratings, note };
 }
 
 // ─── Tag / Place Registries ──────────────────────────────────────────────────
@@ -105,6 +107,19 @@ function highlightMatch(path, query) {
 }
 
 // ─── Render tokens ──────────────────────────────────────────────────────────
+function renderStars(rating, scale) {
+  const total = Math.round(scale);
+  let out = '<span class="token-stars">';
+  for (let i = 1; i <= total; i++) {
+    const fill = rating - (i - 1);
+    if (fill >= 1)        out += '<span class="star full">★</span>';
+    else if (fill >= 0.5) out += '<span class="star half">★</span>';
+    else                  out += '<span class="star empty">★</span>';
+  }
+  out += '</span>';
+  return out;
+}
+
 function renderTokens(raw, type) {
   const parts = [];
 
@@ -114,7 +129,13 @@ function renderTokens(raw, type) {
   for (const m of raw.matchAll(/@([\w\u4e00-\u9fa5/\-_.·]+)/g))
     parts.push({ start: m.index, end: m.index + m[0].length, kind: 'place', value: m[1] });
 
-  const masked = raw.replace(/[#@][\w\u4e00-\u9fa5/\-_.·]+/g, s => ' '.repeat(s.length));
+  for (const m of raw.matchAll(/\*(\d+(?:\.\d+)?)\/(\d+(?:\.\d+)?)/g))
+    parts.push({ start: m.index, end: m.index + m[0].length, kind: 'rating',
+      rating: parseFloat(m[1]), scale: parseFloat(m[2]), str: m[1] + '/' + m[2] });
+
+  const masked = raw
+    .replace(/[#@][\w\u4e00-\u9fa5/\-_.·]+/g, s => ' '.repeat(s.length))
+    .replace(/\*\d+(?:\.\d+)?\/\d+(?:\.\d+)?/g, s => ' '.repeat(s.length));
   for (const m of masked.matchAll(/(?:^|\s)(\d+(?:\.\d+)?)(?=\s|$)/g)) {
     const ns = m.index + m[0].length - m[1].length;
     const ne = ns + m[1].length;
@@ -130,6 +151,8 @@ function renderTokens(raw, type) {
       out += `<a class="token-tag" data-sigil="#" data-path="${escapeHtml(p.value)}">#${escapeHtml(p.value)}</a>`;
     else if (p.kind === 'place')
       out += `<a class="token-place" data-sigil="@" data-path="${escapeHtml(p.value)}">@${escapeHtml(p.value)}</a>`;
+    else if (p.kind === 'rating')
+      out += `<a class="token-rating" data-sigil="*" data-path="${escapeHtml(p.str)}">${renderStars(p.rating, p.scale)}<span class="rating-label">${escapeHtml(p.str)}</span></a>`;
     else
       out += `<span class="token-price${type === 'income' ? ' income' : ''}">${escapeHtml(p.value)}</span>`;
     last = p.end;
@@ -202,7 +225,7 @@ function buildEntryEl(entry, { showDate = false } = {}) {
             ${entry.type === 'income' ? '＋ 收入' : '－ 支出'}
           </button>
           <span class="entry-edit-wishlist${entry.isWishlist ? ' active' : ''}">
-            <i data-lucide="star"></i>${entry.isWishlist ? '已种草' : '种草'}
+            <i data-lucide="heart"></i>${entry.isWishlist ? '已种草' : '种草'}
           </span>
           <span class="entry-edit-hint">Enter 保存 · Esc 取消</span>
         </div>
@@ -233,8 +256,11 @@ function buildEntryEl(entry, { showDate = false } = {}) {
       e.stopPropagation();
       const sigil = tok.dataset.sigil;
       const path  = tok.dataset.path;
-      const returnView = sigil === '#' ? 'tags' : 'places';
-      openDetail(sigil, path, returnView);
+      if (sigil === '*') {
+        openDetail('*', path, 'timeline');
+      } else {
+        openDetail(sigil, path, sigil === '#' ? 'tags' : 'places');
+      }
       return;
     }
     enterEdit(div, entry, textarea, typeBtn, wishBtn, rendered);
@@ -287,7 +313,7 @@ function buildEntryEl(entry, { showDate = false } = {}) {
   wishBtn.addEventListener('click', () => {
     entry.isWishlist = !entry.isWishlist;
     wishBtn.classList.toggle('active', entry.isWishlist);
-    wishBtn.innerHTML = `<i data-lucide="star"></i>${entry.isWishlist ? '已种草' : '种草'}`;
+    wishBtn.innerHTML = `<i data-lucide="heart"></i>${entry.isWishlist ? '已种草' : '种草'}`;
     lucide.createIcons({ nodes: [wishBtn] });
     textarea.focus();
   });
@@ -332,11 +358,12 @@ function commitEdit(div, entry, textarea, rendered) {
   const newRaw = textarea.value.trim();
   if (newRaw && newRaw !== entry.raw) {
     const parsed = parseEntry(newRaw);
-    entry.raw   = newRaw;
-    entry.price = parsed.price;
-    entry.tags  = parsed.tags;
+    entry.raw    = newRaw;
+    entry.price  = parsed.price;
+    entry.tags   = parsed.tags;
     entry.places = parsed.places;
-    entry.note  = parsed.note;
+    entry.ratings = parsed.ratings;
+    entry.note   = parsed.note;
     ensureItems('tags', parsed.tags);
     ensureItems('places', parsed.places);
   }
@@ -436,6 +463,9 @@ function buildTree(items) {
 }
 
 function getEntriesFor(sigil, path) {
+  if (sigil === '*') {
+    return DB.entries.filter(e => (e.ratings || []).some(r => r.str === path));
+  }
   const field = sigil === '#' ? 'tags' : 'places';
   return DB.entries.filter(e => (e[field] || []).some(p => p === path || p.startsWith(path + '/')));
 }
@@ -503,26 +533,38 @@ function openDetail(sigil, path, returnView) {
   detailPath  = path;
   detailReturnView = returnView;
 
+  const isRating = sigil === '*';
+
   // sigil display
   const sigilEl = document.getElementById('detail-sigil');
   sigilEl.textContent = sigil;
-  sigilEl.className = `detail-sigil ${sigil === '#' ? 'tag-sigil' : 'place-sigil'}`;
+  sigilEl.className = `detail-sigil ${sigil === '#' ? 'tag-sigil' : sigil === '@' ? 'place-sigil' : 'rating-sigil'}`;
 
   const nameEl = document.getElementById('detail-name');
-  nameEl.textContent = path;
-  nameEl.className = sigil === '#' ? 'detail-name-tag' : 'detail-name-place';
+  nameEl.textContent = isRating ? renderStarsInline(path) : path;
+  nameEl.className = sigil === '#' ? 'detail-name-tag' : sigil === '@' ? 'detail-name-place' : 'detail-name-rating';
+  nameEl.contentEditable = isRating ? 'false' : 'true';
+
+  // hide/show composer
+  document.getElementById('detail-composer').style.display = isRating ? 'none' : '';
 
   renderDetailEntries();
   document.getElementById('detail-panel').classList.remove('hidden');
 
-  // reset detail composer
-  detailTypeVal = 'expense';
-  detailWishlistVal = false;
-  const typeBtn = document.querySelector('.detail-type-toggle');
-  typeBtn.textContent = '－';
-  typeBtn.className = 'type-btn expense detail-type-toggle';
-  document.querySelector('.detail-wishlist-toggle').checked = false;
-  document.querySelector('.detail-entry-input').innerText = '';
+  if (!isRating) {
+    detailTypeVal = 'expense';
+    detailWishlistVal = false;
+    const typeBtn = document.querySelector('.detail-type-toggle');
+    typeBtn.textContent = '－';
+    typeBtn.className = 'type-btn expense detail-type-toggle';
+    document.querySelector('.detail-wishlist-toggle').checked = false;
+    document.querySelector('.detail-entry-input').innerText = '';
+  }
+}
+
+function renderStarsInline(str) {
+  // str is like "5.5/10" — render as text for title (stars rendered separately below)
+  return str;
 }
 
 function renderDetailEntries() {
@@ -533,6 +575,19 @@ function renderDetailEntries() {
 
   const list = document.getElementById('detail-entries');
   list.innerHTML = '';
+
+  // For rating detail, show star display at top
+  if (detailSigil === '*') {
+    const [ratingStr, scaleStr] = detailPath.split('/');
+    const rating = parseFloat(ratingStr), scale = parseFloat(scaleStr);
+    const starDiv = document.createElement('div');
+    starDiv.className = 'rating-detail-stars';
+    starDiv.innerHTML = renderStars(rating, scale) +
+      `<span class="rating-detail-label">${escapeHtml(detailPath)}</span>` +
+      `<span class="rating-detail-count">${entries.length} 条记录</span>`;
+    list.appendChild(starDiv);
+  }
+
   entries.forEach(e => list.appendChild(buildEntryEl(e, { showDate: true })));
   lucide.createIcons({ nodes: [list] });
 }
@@ -549,6 +604,7 @@ let _nameBeforeFocus = '';
 const detailNameEl = document.getElementById('detail-name');
 detailNameEl.addEventListener('focus', () => { _nameBeforeFocus = detailNameEl.textContent.trim(); });
 detailNameEl.addEventListener('blur', () => {
+  if (detailSigil === '*') return;
   const newPath = detailNameEl.textContent.trim();
   if (newPath && newPath !== _nameBeforeFocus) {
     const dbKey = detailSigil === '#' ? 'tags' : 'places';
@@ -607,7 +663,7 @@ function submitDetailEntry() {
   const entry = {
     id: genId(), timestamp: new Date().toISOString(),
     raw, price: parsed.price, tags: parsed.tags,
-    places: parsed.places, note: parsed.note,
+    places: parsed.places, ratings: parsed.ratings, note: parsed.note,
     type: detailTypeVal, isWishlist: detailWishlistVal,
   };
   DB.entries = [...DB.entries, entry];
@@ -664,7 +720,7 @@ function submitMainEntry() {
   const entry = {
     id: genId(), timestamp: ts, raw,
     price: parsed.price, tags: parsed.tags,
-    places: parsed.places, note: parsed.note,
+    places: parsed.places, ratings: parsed.ratings, note: parsed.note,
     type: composerType, isWishlist: composerWishlist,
   };
   DB.entries = [...DB.entries, entry];
@@ -795,8 +851,8 @@ function seedIfEmpty() {
   if (DB.entries.length) return;
   const now = new Date(), y = now.getFullYear(), mo = now.getMonth();
   const seeds = [
-    { raw: '#星巴克/馥芮白 @星巴克/西湖文化广场 32', tags:['星巴克/馥芮白'], places:['星巴克/西湖文化广场'], price:32, type:'expense' },
-    { raw: '#星巴克/馥芮白 38 换了大杯', tags:['星巴克/馥芮白'], places:[], price:38, type:'expense' },
+    { raw: '#星巴克/馥芮白 @星巴克/西湖文化广场 32 *7/10', tags:['星巴克/馥芮白'], places:['星巴克/西湖文化广场'], price:32, type:'expense' },
+    { raw: '#星巴克/馥芮白 38 换了大杯 *5.5/10', tags:['星巴克/馥芮白'], places:[], price:38, type:'expense' },
     { raw: '#davinci/personal/奶油内页50张 @淘宝', tags:['davinci/personal/奶油内页50张'], places:['淘宝'], price:null, type:'expense', isWishlist:true },
     { raw: '工资 8000', tags:[], places:[], price:8000, type:'income' },
     { raw: '午饭 28 @公司楼下', tags:[], places:['公司楼下'], price:28, type:'expense' },
@@ -805,6 +861,7 @@ function seedIfEmpty() {
     id: genId(),
     timestamp: new Date(y, mo, 3 + i*3, 10+i, 0).toISOString(),
     raw: s.raw, price: s.price, tags: s.tags, places: s.places,
+    ratings: parseEntry(s.raw).ratings,
     note: parseEntry(s.raw).note, type: s.type, isWishlist: s.isWishlist || false,
   }));
   const allTags   = [...new Set(seeds.flatMap(s => s.tags))];
