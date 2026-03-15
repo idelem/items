@@ -22,6 +22,9 @@
       <button class="nav-btn" data-view="wishlist" title="种草">
         <i data-lucide="heart"></i>
       </button>
+      <button class="nav-btn" id="settings-btn" title="设置">
+        <i data-lucide="settings"></i>
+      </button>
     </nav>
 
     <!-- Timeline View -->
@@ -43,7 +46,7 @@
         </div>
         <div id="input-wrap">
           <div id="entry-input" contenteditable="true" spellcheck="false"
-            data-placeholder="记一笔… # 商品  @ 地点  数字=金额"></div>
+            data-placeholder="记一笔… # 商品  @ 地点  数字=金额  *N/N=评分  %N=进度"></div>
           <div id="autocomplete-menu" class="hidden"></div>
         </div>
         <button id="submit-btn"><i data-lucide="corner-down-left"></i></button>
@@ -65,7 +68,7 @@
       <div id="wishlist-list"></div>
     </div>
 
-    <!-- Detail Panel (shared for # and @) -->
+    <!-- Detail Panel -->
     <div id="detail-panel" class="panel hidden">
       <div class="panel-inner">
         <div class="panel-topbar">
@@ -92,6 +95,29 @@
           </div>
           <button class="detail-submit-btn"><i data-lucide="corner-down-left"></i></button>
         </div>
+      </div>
+    </div>
+
+    <!-- Settings Modal -->
+    <div id="settings-overlay" class="overlay hidden"></div>
+    <div id="settings-modal" class="modal hidden">
+      <div class="modal-header">
+        <span class="modal-title">主题设置</span>
+        <button id="settings-close"><i data-lucide="x"></i></button>
+      </div>
+      <div class="modal-body">
+        <div class="settings-section">
+          <div class="settings-label">预设主题</div>
+          <div id="preset-list" class="preset-list"></div>
+        </div>
+        <div class="settings-section">
+          <div class="settings-label">自定义颜色</div>
+          <div id="color-pickers" class="color-pickers"></div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button id="theme-reset" class="btn-ghost">恢复默认</button>
+        <button id="theme-save" class="btn-primary">保存</button>
       </div>
     </div>
   </div>
