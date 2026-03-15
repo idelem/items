@@ -878,20 +878,25 @@ function renderColorPickers() {
     `;
     const swatchBtn = pickerWrap.querySelector('.color-swatch-btn');
     const popover   = pickerWrap.querySelector('.color-popover');
+
+    // Stop clicks inside the popover from bubbling to document
+    popover.addEventListener('click', e => e.stopPropagation());
+    popover.addEventListener('mousedown', e => e.stopPropagation());
+
     swatchBtn.addEventListener('click', e => {
       e.stopPropagation();
-      // close others
-      document.querySelectorAll('.color-popover:not(.hidden)').forEach(p => { if(p!==popover) p.classList.add('hidden'); });
-      popover.classList.toggle('hidden');
-      if (!popover.classList.contains('hidden')) buildColorPicker(popover, key, hex);
+      const isOpen = !popover.classList.contains('hidden');
+      // close all popovers
+      document.querySelectorAll('.color-popover').forEach(p => p.classList.add('hidden'));
+      if (!isOpen) {
+        popover.classList.remove('hidden');
+        // always use current pending value when opening
+        buildColorPicker(popover, key, _pendingTheme[key] || hex);
+      }
     });
     row.appendChild(pickerWrap);
     container.appendChild(row);
   });
-
-  document.addEventListener('click', () => {
-    document.querySelectorAll('.color-popover').forEach(p=>p.classList.add('hidden'));
-  }, { once:false });
 }
 
 function refreshColorPickers() {
@@ -971,6 +976,7 @@ function buildColorPicker(container, varKey, initialHex) {
   function onGradientDown(e) {
     e.stopPropagation();
     const move = ev => {
+      ev.stopPropagation();
       const rect=canvas.getBoundingClientRect();
       const cx=ev.touches?ev.touches[0].clientX:ev.clientX;
       const cy=ev.touches?ev.touches[0].clientY:ev.clientY;
@@ -978,8 +984,11 @@ function buildColorPicker(container, varKey, initialHex) {
       v=Math.max(0,Math.min(1,1-(cy-rect.top)/rect.height));
       updateCursor(); updateOutput();
     };
-    const up=()=>{ window.removeEventListener('mousemove',move); window.removeEventListener('mouseup',up);
-                   window.removeEventListener('touchmove',move); window.removeEventListener('touchend',up); };
+    const up=(ev)=>{
+      ev.stopPropagation();
+      window.removeEventListener('mousemove',move); window.removeEventListener('mouseup',up);
+      window.removeEventListener('touchmove',move); window.removeEventListener('touchend',up);
+    };
     window.addEventListener('mousemove',move); window.addEventListener('mouseup',up);
     window.addEventListener('touchmove',move); window.addEventListener('touchend',up);
     move(e);
@@ -991,13 +1000,17 @@ function buildColorPicker(container, varKey, initialHex) {
   function onHueDown(e) {
     e.stopPropagation();
     const move = ev => {
+      ev.stopPropagation();
       const rect=hueWrap.getBoundingClientRect();
       const cx=ev.touches?ev.touches[0].clientX:ev.clientX;
       h=Math.max(0,Math.min(360,((cx-rect.left)/rect.width)*360));
       updateHueThumb(); drawGradient(); updateOutput();
     };
-    const up=()=>{ window.removeEventListener('mousemove',move); window.removeEventListener('mouseup',up);
-                   window.removeEventListener('touchmove',move); window.removeEventListener('touchend',up); };
+    const up=(ev)=>{
+      ev.stopPropagation();
+      window.removeEventListener('mousemove',move); window.removeEventListener('mouseup',up);
+      window.removeEventListener('touchmove',move); window.removeEventListener('touchend',up);
+    };
     window.addEventListener('mousemove',move); window.addEventListener('mouseup',up);
     window.addEventListener('touchmove',move); window.addEventListener('touchend',up);
     move(e);
@@ -1056,29 +1069,78 @@ document.getElementById('theme-reset').addEventListener('click', () => {
 function closeSettings() {
   document.getElementById('settings-overlay').classList.add('hidden');
   document.getElementById('settings-modal').classList.add('hidden');
-  // revert to saved if not saved
+  document.querySelectorAll('.color-popover').forEach(p=>p.classList.add('hidden'));
   const saved=DB.theme;
   if (saved) applyThemeVars(saved); else applyThemeVars(PRESETS[0].vars);
 }
+
+// Close popovers when clicking outside — single listener
+document.addEventListener('click', () => {
+  document.querySelectorAll('.color-popover').forEach(p=>p.classList.add('hidden'));
+});
 
 // ─── Seed ──────────────────────────────────────────────────────────────────────
 function seedIfEmpty() {
   if (DB.entries.length) return;
   const now=new Date(), y=now.getFullYear(), mo=now.getMonth();
-  const seeds=[
-    { raw:'#星巴克/馥芮白 @星巴克/西湖文化广场 32 *7/10', tags:['星巴克/馥芮白'], places:['星巴克/西湖文化广场'], price:32, type:'expense' },
-    { raw:'#星巴克/馥芮白 38 换了大杯 *5.5/10', tags:['星巴克/馥芮白'], places:[], price:38, type:'expense' },
-    { raw:'#davinci/personal/奶油内页50张 @淘宝 %3/1-240', tags:['davinci/personal/奶油内页50张'], places:['淘宝'], price:null, type:'expense', isWishlist:true },
-    { raw:'工资 8000', tags:[], places:[], price:8000, type:'income' },
-    { raw:'午饭 28 @公司楼下', tags:[], places:['公司楼下'], price:28, type:'expense' },
+
+  // Helper to make timestamps spread across current month
+  const ts = (day, hour=10, min=0) => new Date(y, mo, day, hour, min).toISOString();
+
+  const seeds = [
+    // 收入
+    { raw:'工资 12000', tags:[], places:[], price:12000, type:'income', day:1, hour:9 },
+
+    // 普通支出 + @地点
+    { raw:'午饭 32 @公司楼下/快餐', tags:[], places:['公司楼下/快餐'], price:32, type:'expense', day:2, hour:12 },
+
+    // # 商品 + @ 地点 + 评分
+    { raw:'#咖啡/拿铁 @星巴克/国贸店 38 *8/10', tags:['咖啡/拿铁'], places:['星巴克/国贸店'], price:38, type:'expense', day:3, hour:10 },
+    { raw:'#咖啡/拿铁 @瑞幸/朝阳门 18 *6/10 太酸了', tags:['咖啡/拿铁'], places:['瑞幸/朝阳门'], price:18, type:'expense', day:5, hour:9 },
+    { raw:'#咖啡/拿铁 @星巴克/国贸店 38 *9/10 今天做得好', tags:['咖啡/拿铁'], places:['星巴克/国贸店'], price:38, type:'expense', day:8, hour:11 },
+
+    // 进度 %N/lo-hi（读书）
+    { raw:'#书/原子习惯 %1/1-200 开始读', tags:['书/原子习惯'], places:[], price:null, type:'expense', day:4, hour:21 },
+    { raw:'#书/原子习惯 %68/1-200', tags:['书/原子习惯'], places:[], price:null, type:'expense', day:7, hour:22 },
+    { raw:'#书/原子习惯 %200/1-200 读完了 *9/10', tags:['书/原子习惯'], places:[], price:null, type:'expense', day:10, hour:20 },
+
+    // 进度 %N/total（追剧）
+    { raw:'#剧/黑镜 %3/6 @Netflix', tags:['剧/黑镜'], places:['Netflix'], price:null, type:'expense', day:6, hour:22 },
+    { raw:'#剧/黑镜 %6/6 @Netflix 结局一般 *6.5/10', tags:['剧/黑镜'], places:['Netflix'], price:null, type:'expense', day:9, hour:23 },
+
+    // 进度 %百分比（健身目标）
+    { raw:'#健身/深蹲 %65 今天65%完成量', tags:['健身/深蹲'], places:[], price:null, type:'expense', day:11, hour:19 },
+
+    // 种草（无价格）
+    { raw:'#耳机/索尼WH1000XM5 @京东 种草已久', tags:['耳机/索尼WH1000XM5'], places:['京东'], price:null, type:'expense', isWishlist:true, day:5, hour:14 },
+    // 种草（有参考价格）
+    { raw:'#机械键盘/HHKB @淘宝 1500', tags:['机械键盘/HHKB'], places:['淘宝'], price:1500, type:'expense', isWishlist:true, day:8, hour:16 },
+
+    // 已购种草商品
+    { raw:'#耳机/索尼WH1000XM5 @京东 2299 到手了！*9/10', tags:['耳机/索尼WH1000XM5'], places:['京东'], price:2299, type:'expense', day:12, hour:15 },
+
+    // 收入 + @地点
+    { raw:'freelance收入 3000 @微信转账', tags:[], places:['微信转账'], price:3000, type:'income', day:15, hour:11 },
+
+    // 纯备注型条目（无价格无标签）
+    { raw:'今天把订阅都整理了一遍', tags:[], places:[], price:null, type:'expense', day:16, hour:10 },
+
+    // 多标签多地点
+    { raw:'#零食/薯片 #零食/坚果 @超市/盒马 45', tags:['零食/薯片','零食/坚果'], places:['超市/盒马'], price:45, type:'expense', day:18, hour:18 },
   ];
-  DB.entries=seeds.map((s,i)=>{
-    const p=parseEntry(s.raw);
-    return { id:genId(), timestamp:new Date(y,mo,3+i*3,10+i,0).toISOString(),
-      raw:s.raw, price:s.price, tags:s.tags, places:s.places,
-      ratings:p.ratings, progresses:p.progresses,
-      note:p.note, type:s.type, isWishlist:s.isWishlist||false };
+
+  DB.entries = seeds.map(s => {
+    const p = parseEntry(s.raw);
+    return {
+      id: genId(),
+      timestamp: ts(s.day, s.hour),
+      raw: s.raw, price: s.price,
+      tags: s.tags, places: s.places,
+      ratings: p.ratings, progresses: p.progresses,
+      note: p.note, type: s.type, isWishlist: s.isWishlist||false,
+    };
   });
+
   DB.tags   = [...new Set(seeds.flatMap(s=>s.tags))].map(path=>({id:genId(),path}));
   DB.places = [...new Set(seeds.flatMap(s=>s.places))].map(path=>({id:genId(),path}));
 }
