@@ -234,17 +234,22 @@ body {
 }
 .token-progress:hover { filter: brightness(0.96); }
 .progress-bar-wrap {
-  width: 48px; height: 5px;
+  width: 72px; height: 5px;
   background: color-mix(in srgb, var(--progress-color) 18%, transparent);
   border-radius: 3px; overflow: hidden; flex-shrink: 0;
 }
 .progress-bar-fill {
+  display: block;
   height: 100%; border-radius: 3px;
   background: var(--progress-color);
-  transition: width 0.2s;
+  transition: width 0.3s ease;
+  min-width: 2px;
 }
 .progress-label {
-  font-family: var(--mono); font-size: 11px; color: var(--progress-color);
+  font-family: var(--mono); font-size: 11px; color: var(--progress-color); opacity: 0.7;
+}
+.progress-pct {
+  font-family: var(--mono); font-size: 12px; font-weight: 500; color: var(--progress-color);
 }
 
 /* ── Entry badges & actions ── */
@@ -265,11 +270,11 @@ body {
   position: fixed; bottom: 0; left: 50%; transform: translateX(-50%);
   width: 100%; max-width: 640px; background: var(--surface);
   border-top: 1px solid var(--border); padding: 8px 12px 12px;
-  display: flex; flex-direction: row; align-items: flex-end; gap: 6px;
+  display: flex; align-items: flex-end; gap: 6px;
   box-shadow: 0 -4px 20px rgba(0,0,0,0.06);
 }
-#entry-composer  { z-index: 200; }
-#detail-composer { z-index: 600; }
+#entry-composer  { flex-direction: row; z-index: 200; }
+#detail-composer { flex-direction: row; z-index: 600; }
 
 #composer-controls, #detail-composer-controls { display: contents; }
 
@@ -409,7 +414,7 @@ body {
   position: fixed; bottom: 0; left: 50%; transform: translateX(-50%);
   width: 100%; max-width: 640px; background: var(--surface);
   border-top: 1px solid var(--border); padding: 10px 16px 14px;
-  display: flex; flex-direction: row; gap: 8px;
+  display: flex; flex-direction: column; gap: 8px;
   z-index: 600; box-shadow: 0 -4px 20px rgba(0,0,0,0.06);
 }
 
