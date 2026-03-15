@@ -5,49 +5,59 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>流水账</title>
   <link rel="stylesheet" href="style.css">
+  <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js"></script>
 </head>
 <body>
   <div id="app">
     <nav id="nav">
-      <button class="nav-btn active" data-view="timeline">流水</button>
-      <button class="nav-btn" data-view="tags">标签</button>
-      <button class="nav-btn" data-view="wishlist">种草</button>
+      <button class="nav-btn active" data-view="timeline" title="流水">
+        <i data-lucide="calendar-days"></i>
+      </button>
+      <button class="nav-btn" data-view="tags" title="商品标签">
+        <span class="nav-symbol">#</span>
+      </button>
+      <button class="nav-btn" data-view="places" title="地点店铺">
+        <span class="nav-symbol">@</span>
+      </button>
+      <button class="nav-btn" data-view="wishlist" title="种草">
+        <i data-lucide="star"></i>
+      </button>
     </nav>
 
     <!-- Timeline View -->
     <div id="view-timeline" class="view active">
       <div id="month-header">
-        <button id="prev-month">‹</button>
+        <button id="prev-month"><i data-lucide="chevron-left"></i></button>
         <span id="month-label"></span>
-        <button id="next-month">›</button>
+        <button id="next-month"><i data-lucide="chevron-right"></i></button>
       </div>
       <div id="month-summary" class="summary-bar"></div>
       <div id="timeline-list"></div>
-
-      <!-- New Entry Input -->
       <div id="entry-composer">
         <div id="composer-controls">
-          <button id="type-toggle" class="type-btn expense" title="切换收入/支出">－</button>
+          <button id="type-toggle" class="type-btn expense">－</button>
           <label class="wishlist-label">
-            <input type="checkbox" id="wishlist-toggle"> 种草
+            <input type="checkbox" id="wishlist-toggle">
+            <i data-lucide="star" class="star-icon"></i>
           </label>
         </div>
         <div id="input-wrap">
-          <div
-            id="entry-input"
-            contenteditable="true"
-            spellcheck="false"
-            data-placeholder="记一笔… 用 # 标记商品，数字自动识别为金额"
-          ></div>
+          <div id="entry-input" contenteditable="true" spellcheck="false"
+            data-placeholder="记一笔… # 商品  @ 地点  数字=金额"></div>
           <div id="autocomplete-menu" class="hidden"></div>
         </div>
-        <button id="submit-btn">↵</button>
+        <button id="submit-btn"><i data-lucide="corner-down-left"></i></button>
       </div>
     </div>
 
-    <!-- Tags View -->
+    <!-- Tags (#) View -->
     <div id="view-tags" class="view">
       <div id="tag-tree"></div>
+    </div>
+
+    <!-- Places (@) View -->
+    <div id="view-places" class="view">
+      <div id="place-tree"></div>
     </div>
 
     <!-- Wishlist View -->
@@ -55,29 +65,33 @@
       <div id="wishlist-list"></div>
     </div>
 
-    <!-- Tag Detail Panel -->
-    <div id="tag-detail" class="panel hidden">
-      <button id="tag-detail-back">← 返回</button>
-      <h2 id="tag-detail-name" contenteditable="true" spellcheck="false"></h2>
-      <div id="tag-detail-summary" class="summary-bar"></div>
-      <div id="tag-detail-entries"></div>
-      <div id="tag-entry-composer">
-        <div id="tag-composer-controls">
-          <button class="type-btn expense tag-type-toggle" title="切换收入/支出">－</button>
-          <label class="wishlist-label">
-            <input type="checkbox" class="tag-wishlist-toggle"> 种草
-          </label>
+    <!-- Detail Panel (shared for # and @) -->
+    <div id="detail-panel" class="panel hidden">
+      <div class="panel-inner">
+        <div class="panel-topbar">
+          <button id="detail-back"><i data-lucide="arrow-left"></i> 返回</button>
         </div>
-        <div id="tag-input-wrap">
-          <div
-            class="tag-entry-input"
-            contenteditable="true"
-            spellcheck="false"
-            data-placeholder="在此记录…"
-          ></div>
-          <div class="tag-autocomplete-menu hidden"></div>
+        <div class="panel-header">
+          <span id="detail-sigil" class="detail-sigil"></span>
+          <h2 id="detail-name" contenteditable="true" spellcheck="false"></h2>
         </div>
-        <button class="tag-submit-btn">↵</button>
+        <div id="detail-summary" class="summary-bar"></div>
+        <div id="detail-entries"></div>
+        <div id="detail-composer">
+          <div id="detail-composer-controls">
+            <button class="type-btn expense detail-type-toggle">－</button>
+            <label class="wishlist-label">
+              <input type="checkbox" class="detail-wishlist-toggle">
+              <i data-lucide="star" class="star-icon"></i>
+            </label>
+          </div>
+          <div id="detail-input-wrap">
+            <div class="detail-entry-input" contenteditable="true" spellcheck="false"
+              data-placeholder="在此记录…"></div>
+            <div class="detail-autocomplete-menu hidden"></div>
+          </div>
+          <button class="detail-submit-btn"><i data-lucide="corner-down-left"></i></button>
+        </div>
       </div>
     </div>
   </div>

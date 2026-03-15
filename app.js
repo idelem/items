@@ -1,300 +1,212 @@
-// ─── Storage ───────────────────────────────────────────────────────────────
+// ─── Storage ────────────────────────────────────────────────────────────────
 const DB = {
   get entries() { return JSON.parse(localStorage.getItem('entries') || '[]'); },
   set entries(v) { localStorage.setItem('entries', JSON.stringify(v)); },
   get tags() { return JSON.parse(localStorage.getItem('tags') || '[]'); },
   set tags(v) { localStorage.setItem('tags', JSON.stringify(v)); },
+  get places() { return JSON.parse(localStorage.getItem('places') || '[]'); },
+  set places(v) { localStorage.setItem('places', JSON.stringify(v)); },
 };
 
 function genId() {
   return Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
 }
 
-// ─── Parse ─────────────────────────────────────────────────────────────────
-function parseEntry(raw) {
-  const priceRe = /(?:^|\s)([+-]?\d+(?:\.\d+)?)(?=\s|$)/g;
-  const tagRe = /#([\w\u4e00-\u9fa5/\-_.·]+)/g;
-
-  let price = null;
-  let tags = [];
-  let match;
-
-  // Extract tags
-  const tagMatches = [...raw.matchAll(tagRe)].map(m => m[1]);
-  tags = tagMatches;
-
-  // Extract price (first standalone number not inside a tag)
-  const rawNoTags = raw.replace(tagRe, '');
-  const priceMatch = rawNoTags.match(/(?:^|\s)(\d+(?:\.\d+)?)(?=\s|$)/);
-  if (priceMatch) price = parseFloat(priceMatch[1]);
-
-  // Extract note (remaining text minus tags and price)
-  let note = raw
-    .replace(tagRe, '')
-    .replace(/(?:^|\s)\d+(?:\.\d+)?(?=\s|$)/g, '')
-    .trim();
-
-  return { price, tags, note };
+function escapeRegex(s) {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
-// ─── Tag Registry ──────────────────────────────────────────────────────────
-function ensureTags(paths) {
-  const tags = DB.tags;
+function escapeHtml(s) {
+  return String(s)
+    .replace(/&/g,'&amp;').replace(/</g,'&lt;')
+    .replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+// ─── Parse ──────────────────────────────────────────────────────────────────
+const TAG_RE   = /#([\w\u4e00-\u9fa5/\-_.·]+)/g;
+const PLACE_RE = /@([\w\u4e00-\u9fa5/\-_.·]+)/g;
+const SIGIL_RE = /[#@]([\w\u4e00-\u9fa5/\-_.·]+)/g;
+
+function parseEntry(raw) {
+  const tags   = [...raw.matchAll(TAG_RE)].map(m => m[1]);
+  const places = [...raw.matchAll(PLACE_RE)].map(m => m[1]);
+
+  const stripped = raw.replace(SIGIL_RE, '');
+  const priceMatch = stripped.match(/(?:^|\s)(\d+(?:\.\d+)?)(?=\s|$)/);
+  const price = priceMatch ? parseFloat(priceMatch[1]) : null;
+
+  const note = stripped.replace(/(?:^|\s)\d+(?:\.\d+)?(?=\s|$)/g, '').trim();
+
+  return { price, tags, places, note };
+}
+
+// ─── Tag / Place Registries ──────────────────────────────────────────────────
+function ensureItems(dbKey, paths) {
+  const items = DB[dbKey];
   let changed = false;
   for (const path of paths) {
-    if (!tags.find(t => t.path === path)) {
-      tags.push({ id: genId(), path });
+    if (!items.find(t => t.path === path)) {
+      items.push({ id: genId(), path });
       changed = true;
     }
   }
-  if (changed) DB.tags = tags;
+  if (changed) DB[dbKey] = items;
 }
 
-function renameTag(oldPath, newPath) {
-  // Update tag record
-  const tags = DB.tags;
-  const tag = tags.find(t => t.path === oldPath);
-  if (tag) {
-    // Also rename children
-    const prefix = oldPath + '/';
-    tags.forEach(t => {
-      if (t.path === oldPath) t.path = newPath;
-      else if (t.path.startsWith(prefix)) {
-        t.path = newPath + '/' + t.path.slice(prefix.length);
-      }
-    });
-    DB.tags = tags;
-  }
-
-  // Update all entries
-  const entries = DB.entries;
+function renameItem(dbKey, sigil, oldPath, newPath) {
+  const items = DB[dbKey];
   const prefix = oldPath + '/';
+  items.forEach(t => {
+    if (t.path === oldPath) t.path = newPath;
+    else if (t.path.startsWith(prefix)) t.path = newPath + '/' + t.path.slice(prefix.length);
+  });
+  DB[dbKey] = items;
+
+  const fieldKey = dbKey === 'tags' ? 'tags' : 'places';
+  const entries = DB.entries;
   entries.forEach(e => {
-    // Update tags array
-    e.tags = e.tags.map(tp => {
+    e[fieldKey] = e[fieldKey].map(tp => {
       if (tp === oldPath) return newPath;
       if (tp.startsWith(prefix)) return newPath + '/' + tp.slice(prefix.length);
       return tp;
     });
-    // Update raw text
     e.raw = e.raw.replace(
-      new RegExp('#' + escapeRegex(oldPath) + '(?=/|\\s|$)', 'g'),
-      '#' + newPath
+      new RegExp(escapeRegex(sigil) + escapeRegex(oldPath) + '(?=/|\\s|$)', 'g'),
+      sigil + newPath
     );
   });
   DB.entries = entries;
 }
 
-function escapeRegex(s) {
-  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-}
-
-// ─── Autocomplete ──────────────────────────────────────────────────────────
-function getTagSuggestions(query) {
-  const tags = DB.tags.map(t => t.path);
-  if (!query) return tags.slice(0, 8);
-
-  // Tokenize query by spaces
+// ─── Autocomplete ────────────────────────────────────────────────────────────
+function getSuggestions(dbKey, query) {
+  const paths = DB[dbKey].map(t => t.path);
+  if (!query) return paths.slice(0, 8);
   const tokens = query.toLowerCase().split(/\s+/).filter(Boolean);
-
-  return tags
-    .filter(path => {
-      const lower = path.toLowerCase();
-      // Each token must appear in order (not strict sequential position, just presence)
-      let pos = 0;
-      for (const token of tokens) {
-        const idx = lower.indexOf(token, pos);
-        if (idx === -1) return false;
-        pos = idx + token.length;
-      }
-      return true;
-    })
-    .slice(0, 10);
+  return paths.filter(path => {
+    const lower = path.toLowerCase();
+    let pos = 0;
+    for (const t of tokens) {
+      const idx = lower.indexOf(t, pos);
+      if (idx === -1) return false;
+      pos = idx + t.length;
+    }
+    return true;
+  }).slice(0, 10);
 }
 
 function highlightMatch(path, query) {
   if (!query) return escapeHtml(path);
-  const tokens = query.toLowerCase().split(/\s+/).filter(Boolean);
-  let result = path;
-  // Simple highlight: bold matched tokens
-  tokens.forEach(token => {
-    const re = new RegExp('(' + escapeRegex(token) + ')', 'gi');
-    result = result.replace(re, '<mark>$1</mark>');
+  let result = escapeHtml(path);
+  query.toLowerCase().split(/\s+/).filter(Boolean).forEach(token => {
+    result = result.replace(new RegExp('(' + escapeRegex(token) + ')', 'gi'), '<mark>$1</mark>');
   });
   return result;
 }
 
-// ─── Render entry tokens ───────────────────────────────────────────────────
+// ─── Render tokens ──────────────────────────────────────────────────────────
 function renderTokens(raw, type) {
-  const tagRe = /#([\w\u4e00-\u9fa5/\-_.·]+)/g;
-  const priceRe = /(?:^|\s)(\d+(?:\.\d+)?)(?=\s|$)/g;
-
-  // Replace tags first
-  let html = escapeHtml(raw);
-  html = html.replace(/&amp;/g, '&'); // undo double escape
-
-  // Re-do properly: work on raw, build html
-  let out = '';
-  let last = 0;
   const parts = [];
 
-  // Collect all token spans
-  let m;
-  const tagRe2 = /#([\w\u4e00-\u9fa5/\-_.·]+)/g;
-  while ((m = tagRe2.exec(raw)) !== null) {
-    parts.push({ start: m.index, end: m.index + m[0].length, type: 'tag', value: m[1] });
-  }
+  for (const m of raw.matchAll(/#([\w\u4e00-\u9fa5/\-_.·]+)/g))
+    parts.push({ start: m.index, end: m.index + m[0].length, kind: 'tag', value: m[1] });
 
-  // Price tokens (excluding inside tags)
-  const rawNoTags = raw.replace(/#[\w\u4e00-\u9fa5/\-_.·]+/g, s => ' '.repeat(s.length));
-  const priceRe2 = /(?:^|\s)(\d+(?:\.\d+)?)(?=\s|$)/g;
-  while ((m = priceRe2.exec(rawNoTags)) !== null) {
-    const numStart = m.index + m[0].length - m[1].length;
-    const numEnd = numStart + m[1].length;
-    // Check not overlapping tag
-    const overlaps = parts.some(p => numStart < p.end && numEnd > p.start);
-    if (!overlaps) {
-      parts.push({ start: numStart, end: numEnd, type: 'price', value: m[1] });
-    }
+  for (const m of raw.matchAll(/@([\w\u4e00-\u9fa5/\-_.·]+)/g))
+    parts.push({ start: m.index, end: m.index + m[0].length, kind: 'place', value: m[1] });
+
+  const masked = raw.replace(/[#@][\w\u4e00-\u9fa5/\-_.·]+/g, s => ' '.repeat(s.length));
+  for (const m of masked.matchAll(/(?:^|\s)(\d+(?:\.\d+)?)(?=\s|$)/g)) {
+    const ns = m.index + m[0].length - m[1].length;
+    const ne = ns + m[1].length;
+    if (!parts.some(p => ns < p.end && ne > p.start))
+      parts.push({ start: ns, end: ne, kind: 'price', value: m[1] });
   }
 
   parts.sort((a, b) => a.start - b.start);
-
+  let out = '', last = 0;
   for (const p of parts) {
     out += escapeHtml(raw.slice(last, p.start));
-    if (p.type === 'tag') {
-      out += `<a class="token-tag" data-tag="${escapeHtml(p.value)}">#${escapeHtml(p.value)}</a>`;
-    } else {
-      const cls = type === 'income' ? 'token-price income' : 'token-price';
-      out += `<span class="${cls}">${escapeHtml(p.value)}</span>`;
-    }
+    if (p.kind === 'tag')
+      out += `<a class="token-tag" data-sigil="#" data-path="${escapeHtml(p.value)}">#${escapeHtml(p.value)}</a>`;
+    else if (p.kind === 'place')
+      out += `<a class="token-place" data-sigil="@" data-path="${escapeHtml(p.value)}">@${escapeHtml(p.value)}</a>`;
+    else
+      out += `<span class="token-price${type === 'income' ? ' income' : ''}">${escapeHtml(p.value)}</span>`;
     last = p.end;
   }
   out += escapeHtml(raw.slice(last));
   return out;
 }
 
-function escapeHtml(s) {
-  return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
-}
-
-// ─── Summary helpers ────────────────────────────────────────────────────────
+// ─── Summary helpers ─────────────────────────────────────────────────────────
 function summarize(entries) {
   let income = 0, expense = 0;
   entries.forEach(e => {
     if (e.isWishlist || e.price == null) return;
-    if (e.type === 'income') income += e.price;
-    else expense += e.price;
+    if (e.type === 'income') income += e.price; else expense += e.price;
   });
-  return { income, expense, net: income - expense };
+  return { income, expense };
 }
 
-function fmtMoney(n) {
-  return n === 0 ? '0' : n.toFixed(2).replace(/\.00$/, '');
-}
+function fmtMoney(n) { return n.toFixed(2).replace(/\.00$/, ''); }
 
-function summaryHTML(s) {
+function summaryHTML({ income, expense }) {
   const parts = [];
-  if (s.expense) parts.push(`<span class="expense">－${fmtMoney(s.expense)}</span>`);
-  if (s.income) parts.push(`<span class="income">＋${fmtMoney(s.income)}</span>`);
-  if (s.expense || s.income) {
-    const net = s.income - s.expense;
-    const sign = net >= 0 ? '＋' : '－';
-    parts.push(`<span class="net">净 ${sign}${fmtMoney(Math.abs(net))}</span>`);
+  if (expense) parts.push(`<span class="expense">－${fmtMoney(expense)}</span>`);
+  if (income)  parts.push(`<span class="income">＋${fmtMoney(income)}</span>`);
+  if (income || expense) {
+    const net = income - expense;
+    parts.push(`<span class="net">净 ${net >= 0 ? '＋' : '－'}${fmtMoney(Math.abs(net))}</span>`);
   }
   return parts.join('');
 }
 
-// ─── App State ─────────────────────────────────────────────────────────────
-let currentMonth = new Date();
-currentMonth.setDate(1);
-currentMonth.setHours(0,0,0,0);
-
+// ─── App State ───────────────────────────────────────────────────────────────
+let currentMonth = (() => { const d = new Date(); d.setDate(1); d.setHours(0,0,0,0); return d; })();
 let currentView = 'timeline';
-let currentTagPath = null;
-let autocompleteIndex = -1;
-let tagTypeBtnType = 'expense';
-let tagWishlist = false;
+// detail panel state
+let detailSigil = '#';       // '#' or '@'
+let detailPath  = null;
+let detailReturnView = 'tags'; // which tree to return to
 
-// ─── Timeline Render ────────────────────────────────────────────────────────
-function renderTimeline() {
-  const y = currentMonth.getFullYear();
-  const mo = currentMonth.getMonth();
-  document.getElementById('month-label').textContent =
-    `${y}年${mo + 1}月`;
+let composerType = 'expense';
+let composerWishlist = false;
+let composerOverrideDay = null;
 
-  const entries = DB.entries.filter(e => {
-    const d = new Date(e.timestamp);
-    return d.getFullYear() === y && d.getMonth() === mo;
-  }).sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
-
-  // Month summary
-  const ms = summarize(entries);
-  document.getElementById('month-summary').innerHTML = summaryHTML(ms);
-
-  // Group by day
-  const groups = {};
-  entries.forEach(e => {
-    const d = new Date(e.timestamp);
-    const key = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
-    if (!groups[key]) groups[key] = [];
-    groups[key].push(e);
-  });
-
-  const list = document.getElementById('timeline-list');
-  list.innerHTML = '';
-
-  const sortedDays = Object.keys(groups).sort((a,b) => b.localeCompare(a));
-  for (const day of sortedDays) {
-    const dayEntries = groups[day];
-    const ds = summarize(dayEntries);
-    const [, , dd] = day.split('-');
-    const dateObj = new Date(day);
-    const weekday = '日一二三四五六'[dateObj.getDay()];
-
-    const group = document.createElement('div');
-    group.className = 'day-group';
-    group.innerHTML = `
-      <div class="day-header">
-        <span class="day-date">${parseInt(dd)}日（${weekday}）</span>
-        <span class="day-summary">${summaryHTML(ds)}</span>
-        <button class="day-add-btn" data-day="${day}" title="补记">＋</button>
-      </div>
-    `;
-
-    // Day add button: pre-fill composer and set override date
-    group.querySelector('.day-add-btn').addEventListener('click', () => {
-      entryInput.focus();
-      composerOverrideDay = day;
-      entryInput.scrollIntoView({ behavior: 'smooth', block: 'end' });
-    });
-
-    dayEntries.forEach(e => {
-      group.appendChild(buildEntryEl(e));
-    });
-
-    list.appendChild(group);
-  }
-}
-
-function buildEntryEl(entry) {
+// ─── Entry element ───────────────────────────────────────────────────────────
+function buildEntryEl(entry, { showDate = false } = {}) {
   const div = document.createElement('div');
   div.className = 'entry';
   div.dataset.id = entry.id;
 
   const t = new Date(entry.timestamp);
   const hhmm = `${String(t.getHours()).padStart(2,'0')}:${String(t.getMinutes()).padStart(2,'0')}`;
+  const mmdd = `${t.getMonth()+1}/${t.getDate()}`;
 
   const badges = [];
   if (entry.isWishlist) badges.push(`<span class="entry-badge wishlist">种草</span>`);
   if (entry.type === 'income') badges.push(`<span class="entry-badge income-badge">收入</span>`);
 
   div.innerHTML = `
-    <span class="entry-time" title="点击修改时间">${hhmm}</span>
-    <input class="entry-time-edit" type="time" value="${hhmm}">
+    <div class="entry-time-wrap">
+      ${showDate ? `<span class="entry-date">${mmdd}</span>` : ''}
+      <span class="entry-time">${hhmm}</span>
+      <input class="entry-time-edit" type="time" value="${hhmm}">
+    </div>
     <div class="entry-body">
       <div class="entry-rendered">${renderTokens(entry.raw, entry.type)}</div>
-      <textarea class="entry-edit" rows="2"></textarea>
+      <div class="entry-edit-wrap">
+        <textarea class="entry-edit" rows="2"></textarea>
+        <div class="entry-edit-meta">
+          <button class="entry-edit-type ${entry.type}">
+            ${entry.type === 'income' ? '＋ 收入' : '－ 支出'}
+          </button>
+          <span class="entry-edit-wishlist${entry.isWishlist ? ' active' : ''}">
+            <i data-lucide="star"></i>${entry.isWishlist ? '已种草' : '种草'}
+          </span>
+          <span class="entry-edit-hint">Enter 保存 · Esc 取消</span>
+        </div>
+      </div>
     </div>
     <div class="entry-actions">
       ${badges.join('')}
@@ -302,571 +214,607 @@ function buildEntryEl(entry) {
     </div>
   `;
 
-  const rendered = div.querySelector('.entry-rendered');
-  const edit = div.querySelector('.entry-edit');
-  const timeSpan = div.querySelector('.entry-time');
-  const timeInput = div.querySelector('.entry-time-edit');
-  const deleteBtn = div.querySelector('.entry-delete-btn');
+  lucide.createIcons({ nodes: [div] });
 
-  // Clickable timestamp → time input
+  const rendered   = div.querySelector('.entry-rendered');
+  const editWrap   = div.querySelector('.entry-edit-wrap');
+  const textarea   = div.querySelector('.entry-edit');
+  const typeBtn    = div.querySelector('.entry-edit-type');
+  const wishBtn    = div.querySelector('.entry-edit-wishlist');
+  const timeSpan   = div.querySelector('.entry-time');
+  const timeInput  = div.querySelector('.entry-time-edit');
+  const dateSpan   = div.querySelector('.entry-date');
+  const deleteBtn  = div.querySelector('.entry-delete-btn');
+
+  // ── click tokens → navigate to detail
+  rendered.addEventListener('click', e => {
+    const tok = e.target.closest('[data-sigil]');
+    if (tok) {
+      e.stopPropagation();
+      const sigil = tok.dataset.sigil;
+      const path  = tok.dataset.path;
+      const returnView = sigil === '#' ? 'tags' : 'places';
+      openDetail(sigil, path, returnView);
+      return;
+    }
+    enterEdit(div, entry, textarea, typeBtn, wishBtn, rendered);
+  });
+
+  // ── date click → go to timeline month
+  if (dateSpan) {
+    dateSpan.addEventListener('click', e => {
+      e.stopPropagation();
+      const d = new Date(entry.timestamp);
+      currentMonth = new Date(d.getFullYear(), d.getMonth(), 1);
+      switchView('timeline');
+    });
+  }
+
+  // ── time editing
   timeSpan.addEventListener('click', e => {
     e.stopPropagation();
     timeSpan.style.display = 'none';
     timeInput.style.display = 'inline-block';
     timeInput.focus();
   });
-
   timeInput.addEventListener('change', () => {
     const [h, m] = timeInput.value.split(':').map(Number);
-    const newTs = new Date(entry.timestamp);
-    newTs.setHours(h, m, 0, 0);
-    entry.timestamp = newTs.toISOString();
-    const newHhmm = `${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}`;
-    timeSpan.textContent = newHhmm;
+    const d = new Date(entry.timestamp);
+    d.setHours(h, m, 0, 0);
+    entry.timestamp = d.toISOString();
+    saveEntry(entry);
+    timeSpan.textContent = timeInput.value;
     timeInput.style.display = 'none';
     timeSpan.style.display = '';
-    const entries = DB.entries;
-    const idx = entries.findIndex(en => en.id === entry.id);
-    if (idx !== -1) entries[idx] = entry;
-    DB.entries = entries;
-    renderTimeline();
+    if (currentView === 'timeline') renderTimeline();
   });
-
   timeInput.addEventListener('blur', () => {
     timeInput.style.display = 'none';
     timeSpan.style.display = '';
   });
+  timeInput.addEventListener('keydown', e => { if (e.key === 'Escape') timeInput.blur(); });
 
-  timeInput.addEventListener('keydown', e => {
-    if (e.key === 'Escape') { timeInput.blur(); }
+  // ── inline meta toggles (only active while editing)
+  typeBtn.setAttribute('tabindex', '0');
+  wishBtn.setAttribute('tabindex', '0');
+
+  typeBtn.addEventListener('click', () => {
+    entry.type = entry.type === 'expense' ? 'income' : 'expense';
+    typeBtn.className = `entry-edit-type ${entry.type}`;
+    typeBtn.textContent = entry.type === 'income' ? '＋ 收入' : '－ 支出';
+    textarea.focus();
+  });
+  wishBtn.addEventListener('click', () => {
+    entry.isWishlist = !entry.isWishlist;
+    wishBtn.classList.toggle('active', entry.isWishlist);
+    wishBtn.innerHTML = `<i data-lucide="star"></i>${entry.isWishlist ? '已种草' : '种草'}`;
+    lucide.createIcons({ nodes: [wishBtn] });
+    textarea.focus();
   });
 
-  // Delete
+  // ── commit when focus leaves the entire .entry div
+  div.addEventListener('focusout', e => {
+    if (!div.contains(e.relatedTarget)) {
+      commitEdit(div, entry, textarea, rendered);
+    }
+  });
+
+  textarea.addEventListener('keydown', e => {
+    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); div.blur(); commitEdit(div, entry, textarea, rendered); }
+    if (e.key === 'Escape') { entry.type = entry._origType; entry.isWishlist = entry._origWishlist; textarea.value = entry.raw; div.blur(); commitEdit(div, entry, textarea, rendered); }
+  });
+
+  // ── delete
   deleteBtn.addEventListener('click', e => {
     e.stopPropagation();
     if (!confirm('删除这条记录？')) return;
     DB.entries = DB.entries.filter(en => en.id !== entry.id);
     div.remove();
-    renderTimeline();
-    if (currentView === 'tags') renderTagTree();
-    if (currentTagPath) renderTagDetail(currentTagPath);
-  });
-
-  // Click tag links / edit body
-  rendered.addEventListener('click', e => {
-    const tagEl = e.target.closest('.token-tag');
-    if (tagEl) {
-      e.stopPropagation();
-      openTagDetail(tagEl.dataset.tag);
-      return;
-    }
-    enterEdit(div, entry, edit, rendered);
-  });
-
-  edit.addEventListener('blur', () => {
-    commitEdit(div, entry, edit, rendered);
-  });
-
-  edit.addEventListener('keydown', e => {
-    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); edit.blur(); }
-    if (e.key === 'Escape') { edit.value = entry.raw; edit.blur(); }
+    if (currentView === 'timeline') renderTimeline();
+    if (detailPath) renderDetailEntries();
   });
 
   return div;
 }
 
-
-function enterEdit(div, entry, edit, rendered) {
+function enterEdit(div, entry, textarea, typeBtn, wishBtn, rendered) {
+  entry._origType = entry.type;
+  entry._origWishlist = entry.isWishlist;
   div.classList.add('editing');
-  edit.value = entry.raw;
-  edit.focus();
-  edit.setSelectionRange(edit.value.length, edit.value.length);
+  textarea.value = entry.raw;
+  textarea.focus();
+  textarea.setSelectionRange(textarea.value.length, textarea.value.length);
 }
 
-function commitEdit(div, entry, edit, rendered) {
-  const newRaw = edit.value.trim();
+function commitEdit(div, entry, textarea, rendered) {
+  if (!div.classList.contains('editing')) return;
   div.classList.remove('editing');
-  if (!newRaw || newRaw === entry.raw) {
-    rendered.innerHTML = renderTokens(entry.raw, entry.type);
-    return;
+  const newRaw = textarea.value.trim();
+  if (newRaw && newRaw !== entry.raw) {
+    const parsed = parseEntry(newRaw);
+    entry.raw   = newRaw;
+    entry.price = parsed.price;
+    entry.tags  = parsed.tags;
+    entry.places = parsed.places;
+    entry.note  = parsed.note;
+    ensureItems('tags', parsed.tags);
+    ensureItems('places', parsed.places);
   }
-  const parsed = parseEntry(newRaw);
-  entry.raw = newRaw;
-  entry.price = parsed.price;
-  entry.tags = parsed.tags;
-  entry.note = parsed.note;
+  saveEntry(entry);
+  rendered.innerHTML = renderTokens(entry.raw, entry.type);
+  // update badges
+  const actions = div.querySelector('.entry-actions');
+  const badges = [];
+  if (entry.isWishlist) badges.push(`<span class="entry-badge wishlist">种草</span>`);
+  if (entry.type === 'income') badges.push(`<span class="entry-badge income-badge">收入</span>`);
+  const del = actions.querySelector('.entry-delete-btn');
+  actions.innerHTML = badges.join('');
+  actions.appendChild(del);
+}
 
-  // Ensure new tags exist
-  ensureTags(parsed.tags);
-
+function saveEntry(entry) {
   const entries = DB.entries;
   const idx = entries.findIndex(e => e.id === entry.id);
   if (idx !== -1) entries[idx] = entry;
   DB.entries = entries;
-
-  rendered.innerHTML = renderTokens(entry.raw, entry.type);
-
-  // Re-render tag tree if visible
-  if (currentView === 'tags') renderTagTree();
 }
 
-// ─── Composer ───────────────────────────────────────────────────────────────
-let composerType = 'expense';
-let composerWishlist = false;
-let composerOverrideDay = null; // 'YYYY-MM-DD' when backfilling a specific day
+// ─── Timeline ────────────────────────────────────────────────────────────────
+function renderTimeline() {
+  const y = currentMonth.getFullYear(), mo = currentMonth.getMonth();
+  document.getElementById('month-label').textContent = `${y}年${mo+1}月`;
 
-const typeToggle = document.getElementById('type-toggle');
-const wishlistToggle = document.getElementById('wishlist-toggle');
-const entryInput = document.getElementById('entry-input');
-const autocompleteMenu = document.getElementById('autocomplete-menu');
-const submitBtn = document.getElementById('submit-btn');
-
-typeToggle.addEventListener('click', () => {
-  composerType = composerType === 'expense' ? 'income' : 'expense';
-  typeToggle.textContent = composerType === 'expense' ? '－' : '＋';
-  typeToggle.className = `type-btn ${composerType}`;
-});
-
-wishlistToggle.addEventListener('change', () => {
-  composerWishlist = wishlistToggle.checked;
-});
-
-// Autocomplete logic
-let acQuery = '';
-let acSuggestions = [];
-
-entryInput.addEventListener('input', () => {
-  handleAutocomplete(entryInput, autocompleteMenu, false);
-});
-
-entryInput.addEventListener('keydown', e => {
-  if (!autocompleteMenu.classList.contains('hidden')) {
-    if (e.key === 'ArrowDown') { e.preventDefault(); moveAC(1, autocompleteMenu); return; }
-    if (e.key === 'ArrowUp') { e.preventDefault(); moveAC(-1, autocompleteMenu); return; }
-    if (e.key === 'Enter' || e.key === 'Tab') {
-      const sel = autocompleteMenu.querySelector('.selected');
-      if (sel) { e.preventDefault(); applyAC(sel.dataset.value, entryInput, autocompleteMenu); return; }
-    }
-    if (e.key === 'Escape') { hideAC(autocompleteMenu); return; }
-  }
-  if (e.key === 'Enter' && !e.shiftKey) {
-    e.preventDefault();
-    submitEntry();
-  }
-});
-
-submitBtn.addEventListener('click', submitEntry);
-
-function submitEntry(inputEl, typeVal, wishlistVal, injectedTag) {
-  inputEl = inputEl || entryInput;
-  typeVal = typeVal !== undefined ? typeVal : composerType;
-  wishlistVal = wishlistVal !== undefined ? wishlistVal : composerWishlist;
-
-  let raw = inputEl.innerText.trim();
-  if (!raw) return;
-
-  if (injectedTag && !raw.includes('#' + injectedTag)) {
-    raw = '#' + injectedTag + ' ' + raw;
-  }
-
-  const parsed = parseEntry(raw);
-  ensureTags(parsed.tags);
-
-  let ts;
-  if (inputEl === entryInput && composerOverrideDay) {
-    const [oy, om, od] = composerOverrideDay.split('-').map(Number);
-    const now = new Date();
-    ts = new Date(oy, om - 1, od, now.getHours(), now.getMinutes(), 0).toISOString();
-    composerOverrideDay = null;
-  } else {
-    ts = new Date().toISOString();
-  }
-
-  const entry = {
-    id: genId(),
-    timestamp: ts,
-    raw,
-    price: parsed.price,
-    tags: parsed.tags,
-    note: parsed.note,
-    type: typeVal,
-    isWishlist: wishlistVal,
-  };
-
-  const entries = DB.entries;
-  entries.push(entry);
-  DB.entries = entries;
-
-  inputEl.innerText = '';
-  hideAC(autocompleteMenu);
-
-  // Reset
-  if (inputEl === entryInput) {
-    composerType = 'expense';
-    composerWishlist = false;
-    typeToggle.textContent = '－';
-    typeToggle.className = 'type-btn expense';
-    wishlistToggle.checked = false;
-    renderTimeline();
-  } else {
-    renderTagDetail(currentTagPath);
-  }
-
-  if (currentView === 'tags') renderTagTree();
-}
-
-// ─── Autocomplete core ──────────────────────────────────────────────────────
-function getCaretTagQuery(el) {
-  const text = el.innerText || '';
-  const sel = window.getSelection();
-  if (!sel.rangeCount) return null;
-  const range = sel.getRangeAt(0);
-  const preRange = range.cloneRange();
-  preRange.selectNodeContents(el);
-  preRange.setEnd(range.startContainer, range.startOffset);
-  const pre = preRange.toString();
-
-  const hashIdx = pre.lastIndexOf('#');
-  if (hashIdx === -1) return null;
-  // Make sure there's no space after the last #
-  const afterHash = pre.slice(hashIdx + 1);
-  if (/\s/.test(afterHash)) return null;
-  return afterHash;
-}
-
-function handleAutocomplete(inputEl, menuEl, isTagComposer) {
-  const query = getCaretTagQuery(inputEl);
-  if (query === null) { hideAC(menuEl); return; }
-  acQuery = query;
-  acSuggestions = getTagSuggestions(query);
-  if (!acSuggestions.length) { hideAC(menuEl); return; }
-  renderAC(menuEl, acSuggestions, query, inputEl);
-}
-
-function renderAC(menuEl, suggestions, query, inputEl) {
-  menuEl.innerHTML = '';
-  menuEl.classList.remove('hidden');
-  autocompleteIndex = -1;
-  suggestions.forEach((s, i) => {
-    const item = document.createElement('div');
-    item.className = 'autocomplete-item';
-    item.dataset.value = s;
-    item.innerHTML = highlightMatch(s, query);
-    item.addEventListener('mousedown', e => {
-      e.preventDefault();
-      applyAC(s, inputEl, menuEl);
-    });
-    menuEl.appendChild(item);
+  const allEntries = DB.entries;
+  const monthEntries = allEntries.filter(e => {
+    const d = new Date(e.timestamp);
+    return d.getFullYear() === y && d.getMonth() === mo;
   });
-}
 
-function hideAC(menuEl) {
-  menuEl.classList.add('hidden');
-  autocompleteIndex = -1;
-}
+  document.getElementById('month-summary').innerHTML = summaryHTML(summarize(monthEntries));
 
-function moveAC(dir, menuEl) {
-  const items = menuEl.querySelectorAll('.autocomplete-item');
-  if (!items.length) return;
-  items[autocompleteIndex]?.classList.remove('selected');
-  autocompleteIndex = Math.max(-1, Math.min(items.length - 1, autocompleteIndex + dir));
-  items[autocompleteIndex]?.classList.add('selected');
-}
+  // group by day
+  const groups = {};
+  monthEntries.forEach(e => {
+    const d = new Date(e.timestamp);
+    const key = `${y}-${String(mo+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+    (groups[key] = groups[key] || []).push(e);
+  });
 
-function applyAC(value, inputEl, menuEl) {
-  // Replace the current #query with #value
-  const text = inputEl.innerText;
-  const sel = window.getSelection();
-  if (!sel.rangeCount) return;
-  const range = sel.getRangeAt(0);
-  const preRange = range.cloneRange();
-  preRange.selectNodeContents(inputEl);
-  preRange.setEnd(range.startContainer, range.startOffset);
-  const pre = preRange.toString();
-  const hashIdx = pre.lastIndexOf('#');
-  if (hashIdx === -1) return;
+  // all days in month
+  const daysInMonth = new Date(y, mo+1, 0).getDate();
+  const list = document.getElementById('timeline-list');
+  list.innerHTML = '';
 
-  // Reconstruct: everything before #, then #value, then rest
-  const post = text.slice(pre.length);
-  const newText = text.slice(0, hashIdx) + '#' + value + (post.startsWith(' ') ? '' : ' ') + post;
-  inputEl.innerText = newText;
+  for (let d = daysInMonth; d >= 1; d--) {
+    const key = `${y}-${String(mo+1).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
+    const dayEntries = (groups[key] || []).sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
+    const dateObj = new Date(y, mo, d);
+    const weekday = '日一二三四五六'[dateObj.getDay()];
+    const ds = summarize(dayEntries);
 
-  // Move caret to after inserted tag
-  const newPos = hashIdx + 1 + value.length + 1;
-  moveCaret(inputEl, Math.min(newPos, newText.length));
+    const group = document.createElement('div');
+    group.className = 'day-group';
 
-  hideAC(menuEl);
-}
+    const header = document.createElement('div');
+    header.className = 'day-header';
+    header.innerHTML = `
+      <span class="day-date">${d}日（${weekday}）</span>
+      <span class="day-summary">${summaryHTML(ds)}</span>
+    `;
 
-function moveCaret(el, pos) {
-  const range = document.createRange();
-  const sel = window.getSelection();
-  let node = el.firstChild;
-  if (!node) return;
-  // If text node
-  if (node.nodeType === Node.TEXT_NODE) {
-    range.setStart(node, Math.min(pos, node.length));
-    range.collapse(true);
-    sel.removeAllRanges();
-    sel.addRange(range);
+    const addBtn = document.createElement('button');
+    addBtn.className = 'day-add-btn';
+    addBtn.title = '补记';
+    addBtn.innerHTML = '<i data-lucide="plus"></i>';
+    addBtn.addEventListener('click', () => {
+      composerOverrideDay = key;
+      document.getElementById('entry-input').focus();
+      document.getElementById('entry-composer').scrollIntoView({ behavior: 'smooth', block: 'end' });
+    });
+    header.appendChild(addBtn);
+    group.appendChild(header);
+
+    dayEntries.forEach(e => group.appendChild(buildEntryEl(e)));
+    list.appendChild(group);
   }
+
+  lucide.createIcons({ nodes: [list, document.getElementById('month-header')] });
 }
 
-// ─── Tag Tree ───────────────────────────────────────────────────────────────
-function buildTagTree(tags, entries) {
-  // Build nested structure
+// ─── Tree (generic for # and @) ──────────────────────────────────────────────
+function buildTree(items) {
   const root = {};
-  tags.forEach(t => {
-    const parts = t.path.split('/');
+  items.forEach(({ path }) => {
+    const parts = path.split('/');
     let node = root;
     parts.forEach((part, i) => {
-      if (!node[part]) node[part] = { _children: {}, _path: parts.slice(0, i+1).join('/') };
+      if (!node[part]) node[part] = { _path: parts.slice(0,i+1).join('/'), _children: {} };
       node = node[part]._children;
     });
   });
   return root;
 }
 
-function getEntriesForTag(path, entries) {
-  return entries.filter(e => e.tags.some(tp => tp === path || tp.startsWith(path + '/')));
+function getEntriesFor(sigil, path) {
+  const field = sigil === '#' ? 'tags' : 'places';
+  return DB.entries.filter(e => (e[field] || []).some(p => p === path || p.startsWith(path + '/')));
 }
 
-function renderTagTree() {
-  const tags = DB.tags;
-  const entries = DB.entries;
-  const tree = buildTagTree(tags, entries);
-  const container = document.getElementById('tag-tree');
+function renderTree(containerId, sigil, dbKey, nodeClass) {
+  const items = DB[dbKey];
+  const tree  = buildTree(items);
+  const container = document.getElementById(containerId);
   container.innerHTML = '';
-  renderTreeLevel(tree, container, entries);
+  renderTreeLevel(container, tree, sigil, nodeClass);
+  lucide.createIcons({ nodes: [container] });
 }
 
-function renderTreeLevel(node, container, entries) {
+function renderTreeLevel(container, node, sigil, nodeClass) {
   Object.keys(node).sort().forEach(key => {
     const child = node[key];
-    const path = child._path;
+    const path  = child._path;
     const hasChildren = Object.keys(child._children).length > 0;
-    const nodeEntries = getEntriesForTag(path, entries);
-    const s = summarize(nodeEntries);
+    const s = summarize(getEntriesFor(sigil, path));
 
     const nodeEl = document.createElement('div');
-    nodeEl.className = 'tree-node';
+    nodeEl.className = `tree-node ${nodeClass}`;
 
     const header = document.createElement('div');
     header.className = 'tree-node-header';
+    header.innerHTML = `
+      <span class="tree-toggle">${hasChildren ? '▶' : ''}</span>
+      <span class="tree-node-name">${escapeHtml(key)}</span>
+      <span class="tree-node-summary">${summaryHTML(s)}</span>
+      <button class="tree-open-btn" title="详情"><i data-lucide="arrow-right"></i></button>
+    `;
 
-    const toggle = document.createElement('span');
-    toggle.className = 'tree-toggle';
-    toggle.textContent = hasChildren ? '▶' : ' ';
-
-    const name = document.createElement('span');
-    name.className = 'tree-node-name';
-    name.textContent = key;
-
-    const summary = document.createElement('span');
-    summary.className = 'tree-node-summary';
-    summary.innerHTML = summaryHTML(s);
-
-    const openBtn = document.createElement('button');
-    openBtn.className = 'tree-open-btn';
-    openBtn.textContent = '→';
-    openBtn.title = '查看详情';
-    openBtn.addEventListener('click', e => {
+    header.querySelector('.tree-open-btn').addEventListener('click', e => {
       e.stopPropagation();
-      openTagDetail(path);
+      const returnView = sigil === '#' ? 'tags' : 'places';
+      openDetail(sigil, path, returnView);
     });
 
-    header.appendChild(toggle);
-    header.appendChild(name);
-    header.appendChild(summary);
-    header.appendChild(openBtn);
     nodeEl.appendChild(header);
 
     if (hasChildren) {
       const childrenEl = document.createElement('div');
       childrenEl.className = 'tree-children';
-      renderTreeLevel(child._children, childrenEl, entries);
+      renderTreeLevel(childrenEl, child._children, sigil, nodeClass);
       nodeEl.appendChild(childrenEl);
-
-      header.addEventListener('click', () => {
-        nodeEl.classList.toggle('open');
+      header.addEventListener('click', e => {
+        if (!e.target.closest('.tree-open-btn')) nodeEl.classList.toggle('open');
       });
     } else {
-      header.addEventListener('click', () => openTagDetail(path));
+      header.addEventListener('click', e => {
+        if (!e.target.closest('.tree-open-btn')) openDetail(sigil, path, sigil === '#' ? 'tags' : 'places');
+      });
     }
 
     container.appendChild(nodeEl);
   });
 }
 
-// ─── Tag Detail ─────────────────────────────────────────────────────────────
-function openTagDetail(path) {
-  currentTagPath = path;
-  renderTagDetail(path);
-  document.getElementById('tag-detail').classList.remove('hidden');
+// ─── Detail Panel ────────────────────────────────────────────────────────────
+let detailTypeVal = 'expense';
+let detailWishlistVal = false;
+
+function openDetail(sigil, path, returnView) {
+  detailSigil = sigil;
+  detailPath  = path;
+  detailReturnView = returnView;
+
+  // sigil display
+  const sigilEl = document.getElementById('detail-sigil');
+  sigilEl.textContent = sigil;
+  sigilEl.className = `detail-sigil ${sigil === '#' ? 'tag-sigil' : 'place-sigil'}`;
+
+  const nameEl = document.getElementById('detail-name');
+  nameEl.textContent = path;
+  nameEl.className = sigil === '#' ? 'detail-name-tag' : 'detail-name-place';
+
+  renderDetailEntries();
+  document.getElementById('detail-panel').classList.remove('hidden');
+
+  // reset detail composer
+  detailTypeVal = 'expense';
+  detailWishlistVal = false;
+  const typeBtn = document.querySelector('.detail-type-toggle');
+  typeBtn.textContent = '－';
+  typeBtn.className = 'type-btn expense detail-type-toggle';
+  document.querySelector('.detail-wishlist-toggle').checked = false;
+  document.querySelector('.detail-entry-input').innerText = '';
 }
 
-function renderTagDetail(path) {
-  const entries = getEntriesForTag(path, DB.entries)
+function renderDetailEntries() {
+  const entries = getEntriesFor(detailSigil, detailPath)
     .sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
 
-  const s = summarize(entries);
+  document.getElementById('detail-summary').innerHTML = summaryHTML(summarize(entries));
 
-  document.getElementById('tag-detail-name').textContent = path;
-  document.getElementById('tag-detail-summary').innerHTML = summaryHTML(s);
-
-  const list = document.getElementById('tag-detail-entries');
+  const list = document.getElementById('detail-entries');
   list.innerHTML = '';
-  entries.forEach(e => list.appendChild(buildEntryEl(e)));
+  entries.forEach(e => list.appendChild(buildEntryEl(e, { showDate: true })));
+  lucide.createIcons({ nodes: [list] });
 }
 
-// Tag rename
-const tagDetailName = document.getElementById('tag-detail-name');
-let nameBeforeFocus = '';
-
-tagDetailName.addEventListener('focus', () => {
-  nameBeforeFocus = tagDetailName.textContent.trim();
+// detail back
+document.getElementById('detail-back').addEventListener('click', () => {
+  document.getElementById('detail-panel').classList.add('hidden');
+  detailPath = null;
+  switchView(detailReturnView);
 });
 
-tagDetailName.addEventListener('blur', () => {
-  const newPath = tagDetailName.textContent.trim();
-  if (newPath && newPath !== nameBeforeFocus) {
-    renameTag(nameBeforeFocus, newPath);
-    currentTagPath = newPath;
-    renderTagDetail(newPath);
-    renderTagTree();
+// detail name rename
+let _nameBeforeFocus = '';
+const detailNameEl = document.getElementById('detail-name');
+detailNameEl.addEventListener('focus', () => { _nameBeforeFocus = detailNameEl.textContent.trim(); });
+detailNameEl.addEventListener('blur', () => {
+  const newPath = detailNameEl.textContent.trim();
+  if (newPath && newPath !== _nameBeforeFocus) {
+    const dbKey = detailSigil === '#' ? 'tags' : 'places';
+    renameItem(dbKey, detailSigil, _nameBeforeFocus, newPath);
+    detailPath = newPath;
+    renderDetailEntries();
+    if (detailSigil === '#') renderTree('tag-tree', '#', 'tags', 'tag-tree-node');
+    else renderTree('place-tree', '@', 'places', 'place-tree-node');
   }
 });
-
-tagDetailName.addEventListener('keydown', e => {
-  if (e.key === 'Enter') { e.preventDefault(); tagDetailName.blur(); }
-  if (e.key === 'Escape') { tagDetailName.textContent = nameBeforeFocus; tagDetailName.blur(); }
+detailNameEl.addEventListener('keydown', e => {
+  if (e.key === 'Enter') { e.preventDefault(); detailNameEl.blur(); }
+  if (e.key === 'Escape') { detailNameEl.textContent = _nameBeforeFocus; detailNameEl.blur(); }
 });
 
-document.getElementById('tag-detail-back').addEventListener('click', () => {
-  document.getElementById('tag-detail').classList.add('hidden');
-  currentTagPath = null;
+// detail composer
+const detailTypeBtn = document.querySelector('.detail-type-toggle');
+const detailWishlistToggle = document.querySelector('.detail-wishlist-toggle');
+const detailInput = document.querySelector('.detail-entry-input');
+const detailACMenu = document.querySelector('.detail-autocomplete-menu');
+const detailSubmitBtn = document.querySelector('.detail-submit-btn');
+
+detailTypeBtn.addEventListener('click', () => {
+  detailTypeVal = detailTypeVal === 'expense' ? 'income' : 'expense';
+  detailTypeBtn.textContent = detailTypeVal === 'expense' ? '－' : '＋';
+  detailTypeBtn.className = `type-btn ${detailTypeVal} detail-type-toggle`;
 });
+detailWishlistToggle.addEventListener('change', () => { detailWishlistVal = detailWishlistToggle.checked; });
 
-// Tag composer
-const tagTypeBtn = document.querySelector('.tag-type-toggle');
-const tagWishlistToggle = document.querySelector('.tag-wishlist-toggle');
-const tagInput = document.querySelector('.tag-entry-input');
-const tagACMenu = document.querySelector('.tag-autocomplete-menu');
-const tagSubmitBtn = document.querySelector('.tag-submit-btn');
-
-tagTypeBtn.addEventListener('click', () => {
-  tagTypeBtnType = tagTypeBtnType === 'expense' ? 'income' : 'expense';
-  tagTypeBtn.textContent = tagTypeBtnType === 'expense' ? '－' : '＋';
-  tagTypeBtn.className = `type-btn ${tagTypeBtnType} tag-type-toggle`;
-});
-
-tagWishlistToggle.addEventListener('change', () => {
-  tagWishlist = tagWishlistToggle.checked;
-});
-
-tagInput.addEventListener('input', () => {
-  handleAutocomplete(tagInput, tagACMenu, true);
-});
-
-tagInput.addEventListener('keydown', e => {
-  if (!tagACMenu.classList.contains('hidden')) {
-    if (e.key === 'ArrowDown') { e.preventDefault(); moveAC(1, tagACMenu); return; }
-    if (e.key === 'ArrowUp') { e.preventDefault(); moveAC(-1, tagACMenu); return; }
-    if (e.key === 'Enter' || e.key === 'Tab') {
-      const sel = tagACMenu.querySelector('.selected');
-      if (sel) { e.preventDefault(); applyAC(sel.dataset.value, tagInput, tagACMenu); return; }
+detailInput.addEventListener('input', () => handleAC(detailInput, detailACMenu));
+detailInput.addEventListener('keydown', e => {
+  if (!detailACMenu.classList.contains('hidden')) {
+    if (e.key === 'ArrowDown') { e.preventDefault(); moveAC(1, detailACMenu); return; }
+    if (e.key === 'ArrowUp')   { e.preventDefault(); moveAC(-1, detailACMenu); return; }
+    if ((e.key === 'Enter' || e.key === 'Tab') && detailACMenu.querySelector('.selected')) {
+      e.preventDefault(); applyAC(detailACMenu.querySelector('.selected').dataset.value, detailInput, detailACMenu); return;
     }
-    if (e.key === 'Escape') { hideAC(tagACMenu); return; }
+    if (e.key === 'Escape') { hideAC(detailACMenu); return; }
   }
-  if (e.key === 'Enter' && !e.shiftKey) {
-    e.preventDefault();
-    submitEntry(tagInput, tagTypeBtnType, tagWishlist, currentTagPath);
+  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); submitDetailEntry(); }
+});
+detailSubmitBtn.addEventListener('click', submitDetailEntry);
+
+function submitDetailEntry() {
+  let raw = detailInput.innerText.trim();
+  if (!raw) return;
+  // inject the current detail tag/place if not present
+  const sigil = detailSigil, path = detailPath;
+  const marker = sigil + path;
+  if (!raw.includes(marker)) raw = marker + ' ' + raw;
+
+  const parsed = parseEntry(raw);
+  ensureItems('tags', parsed.tags);
+  ensureItems('places', parsed.places);
+
+  const entry = {
+    id: genId(), timestamp: new Date().toISOString(),
+    raw, price: parsed.price, tags: parsed.tags,
+    places: parsed.places, note: parsed.note,
+    type: detailTypeVal, isWishlist: detailWishlistVal,
+  };
+  DB.entries = [...DB.entries, entry];
+  detailInput.innerText = '';
+  renderDetailEntries();
+}
+
+// ─── Main Composer ───────────────────────────────────────────────────────────
+const typeToggleBtn = document.getElementById('type-toggle');
+const wishlistToggle = document.getElementById('wishlist-toggle');
+const entryInput = document.getElementById('entry-input');
+const acMenu = document.getElementById('autocomplete-menu');
+const submitBtn = document.getElementById('submit-btn');
+
+typeToggleBtn.addEventListener('click', () => {
+  composerType = composerType === 'expense' ? 'income' : 'expense';
+  typeToggleBtn.textContent = composerType === 'expense' ? '－' : '＋';
+  typeToggleBtn.className = `type-btn ${composerType}`;
+});
+wishlistToggle.addEventListener('change', () => { composerWishlist = wishlistToggle.checked; });
+
+entryInput.addEventListener('input', () => handleAC(entryInput, acMenu));
+entryInput.addEventListener('keydown', e => {
+  if (!acMenu.classList.contains('hidden')) {
+    if (e.key === 'ArrowDown') { e.preventDefault(); moveAC(1, acMenu); return; }
+    if (e.key === 'ArrowUp')   { e.preventDefault(); moveAC(-1, acMenu); return; }
+    if ((e.key === 'Enter' || e.key === 'Tab') && acMenu.querySelector('.selected')) {
+      e.preventDefault(); applyAC(acMenu.querySelector('.selected').dataset.value, entryInput, acMenu); return;
+    }
+    if (e.key === 'Escape') { hideAC(acMenu); return; }
   }
+  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); submitMainEntry(); }
 });
+submitBtn.addEventListener('click', submitMainEntry);
 
-tagSubmitBtn.addEventListener('click', () => {
-  submitEntry(tagInput, tagTypeBtnType, tagWishlist, currentTagPath);
-});
+function submitMainEntry() {
+  const raw = entryInput.innerText.trim();
+  if (!raw) return;
 
-// ─── Wishlist Render ─────────────────────────────────────────────────────────
+  const parsed = parseEntry(raw);
+  ensureItems('tags', parsed.tags);
+  ensureItems('places', parsed.places);
+
+  let ts;
+  if (composerOverrideDay) {
+    const [oy, om, od] = composerOverrideDay.split('-').map(Number);
+    const now = new Date();
+    ts = new Date(oy, om-1, od, now.getHours(), now.getMinutes()).toISOString();
+    composerOverrideDay = null;
+  } else {
+    ts = new Date().toISOString();
+  }
+
+  const entry = {
+    id: genId(), timestamp: ts, raw,
+    price: parsed.price, tags: parsed.tags,
+    places: parsed.places, note: parsed.note,
+    type: composerType, isWishlist: composerWishlist,
+  };
+  DB.entries = [...DB.entries, entry];
+
+  entryInput.innerText = '';
+  composerType = 'expense'; composerWishlist = false;
+  typeToggleBtn.textContent = '－';
+  typeToggleBtn.className = 'type-btn expense';
+  wishlistToggle.checked = false;
+
+  renderTimeline();
+}
+
+// ─── Autocomplete core ───────────────────────────────────────────────────────
+let _acIndex = -1;
+
+function getCaretSigilQuery(el) {
+  const sel = window.getSelection();
+  if (!sel.rangeCount) return null;
+  const range = sel.getRangeAt(0);
+  const pre = range.cloneRange();
+  pre.selectNodeContents(el);
+  pre.setEnd(range.startContainer, range.startOffset);
+  const text = pre.toString();
+  const m = text.match(/[#@]([\w\u4e00-\u9fa5/\-_.·]*)$/);
+  if (!m) return null;
+  return { sigil: text[m.index], query: m[1] };
+}
+
+function handleAC(inputEl, menuEl) {
+  const hit = getCaretSigilQuery(inputEl);
+  if (!hit) { hideAC(menuEl); return; }
+  const dbKey = hit.sigil === '#' ? 'tags' : 'places';
+  const suggestions = getSuggestions(dbKey, hit.query);
+  if (!suggestions.length) { hideAC(menuEl); return; }
+  menuEl.innerHTML = '';
+  menuEl.classList.remove('hidden');
+  _acIndex = -1;
+  const cls = hit.sigil === '#' ? 'tag-ac' : 'place-ac';
+  suggestions.forEach(s => {
+    const item = document.createElement('div');
+    item.className = `autocomplete-item ${cls}`;
+    item.dataset.value = hit.sigil + s;
+    item.innerHTML = escapeHtml(hit.sigil) + highlightMatch(s, hit.query);
+    item.addEventListener('mousedown', e => { e.preventDefault(); applyAC(hit.sigil + s, inputEl, menuEl); });
+    menuEl.appendChild(item);
+  });
+}
+
+function hideAC(menuEl) { menuEl.classList.add('hidden'); _acIndex = -1; }
+
+function moveAC(dir, menuEl) {
+  const items = [...menuEl.querySelectorAll('.autocomplete-item')];
+  if (!items.length) return;
+  items[_acIndex]?.classList.remove('selected');
+  _acIndex = Math.max(-1, Math.min(items.length-1, _acIndex + dir));
+  items[_acIndex]?.classList.add('selected');
+}
+
+function applyAC(fullValue, inputEl, menuEl) {
+  // fullValue is like '#star巴克' or '@淘宝'
+  const sel = window.getSelection();
+  if (!sel.rangeCount) return;
+  const range = sel.getRangeAt(0);
+  const pre = range.cloneRange();
+  pre.selectNodeContents(inputEl);
+  pre.setEnd(range.startContainer, range.startOffset);
+  const preText = pre.toString();
+  const m = preText.match(/[#@][\w\u4e00-\u9fa5/\-_.·]*$/);
+  if (!m) return;
+  const fullText = inputEl.innerText;
+  const insertPos = preText.length - m[0].length;
+  const postText = fullText.slice(preText.length);
+  const newText = fullText.slice(0, insertPos) + fullValue + (postText.startsWith(' ') ? '' : ' ') + postText;
+  inputEl.innerText = newText;
+  const newPos = insertPos + fullValue.length + 1;
+  try {
+    const textNode = inputEl.firstChild;
+    if (textNode) {
+      const r = document.createRange();
+      r.setStart(textNode, Math.min(newPos, textNode.length));
+      r.collapse(true);
+      sel.removeAllRanges();
+      sel.addRange(r);
+    }
+  } catch(_) {}
+  hideAC(menuEl);
+}
+
+// ─── Wishlist ────────────────────────────────────────────────────────────────
 function renderWishlist() {
-  const entries = DB.entries
-    .filter(e => e.isWishlist)
+  const entries = DB.entries.filter(e => e.isWishlist)
     .sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
-
   const list = document.getElementById('wishlist-list');
   list.innerHTML = '';
-
   if (!entries.length) {
-    list.innerHTML = '<p style="color:var(--text-light);padding:24px 0;text-align:center;font-size:14px;">还没有种草条目</p>';
+    list.innerHTML = '<p class="wishlist-empty">还没有种草条目</p>';
     return;
   }
-
-  entries.forEach(e => {
-    const el = buildEntryEl(e);
-    // Prepend date instead of time
-    const d = new Date(e.timestamp);
-    const dateStr = `${d.getMonth()+1}/${d.getDate()}`;
-    el.querySelector('.entry-time').textContent = dateStr;
-    list.appendChild(el);
-  });
+  entries.forEach(e => list.appendChild(buildEntryEl(e, { showDate: true })));
+  lucide.createIcons({ nodes: [list] });
 }
 
+// ─── Nav ─────────────────────────────────────────────────────────────────────
+function switchView(viewName) {
+  currentView = viewName;
+  document.querySelectorAll('.nav-btn').forEach(b => b.classList.toggle('active', b.dataset.view === viewName));
+  document.querySelectorAll('.view').forEach(v => v.classList.toggle('active', v.id === 'view-' + viewName));
+  if (viewName === 'timeline') renderTimeline();
+  if (viewName === 'tags')     renderTree('tag-tree',   '#', 'tags',   'tag-tree-node');
+  if (viewName === 'places')   renderTree('place-tree', '@', 'places', 'place-tree-node');
+  if (viewName === 'wishlist') renderWishlist();
+}
 
 document.querySelectorAll('.nav-btn').forEach(btn => {
-  btn.addEventListener('click', () => {
-    document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
-    btn.classList.add('active');
-    currentView = btn.dataset.view;
-    document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
-    document.getElementById('view-' + currentView).classList.add('active');
-    if (currentView === 'tags') renderTagTree();
-    if (currentView === 'timeline') renderTimeline();
-    if (currentView === 'wishlist') renderWishlist();
-  });
+  btn.addEventListener('click', () => switchView(btn.dataset.view));
 });
 
-// Month nav
 document.getElementById('prev-month').addEventListener('click', () => {
-  currentMonth.setMonth(currentMonth.getMonth() - 1);
-  renderTimeline();
+  currentMonth.setMonth(currentMonth.getMonth() - 1); renderTimeline();
 });
 document.getElementById('next-month').addEventListener('click', () => {
-  currentMonth.setMonth(currentMonth.getMonth() + 1);
-  renderTimeline();
+  currentMonth.setMonth(currentMonth.getMonth() + 1); renderTimeline();
 });
 
-// ─── Seed data (first run) ──────────────────────────────────────────────────
+// ─── Seed ─────────────────────────────────────────────────────────────────────
 function seedIfEmpty() {
   if (DB.entries.length) return;
-  const now = new Date();
-  const y = now.getFullYear(), mo = now.getMonth();
-
+  const now = new Date(), y = now.getFullYear(), mo = now.getMonth();
   const seeds = [
-    { raw: '#星巴克/馥芮白 32', type: 'expense', tags: ['星巴克/馥芮白'], price: 32 },
-    { raw: '#星巴克/馥芮白 38 换了大杯', type: 'expense', tags: ['星巴克/馥芮白'], price: 38 },
-    { raw: '#davinci/personal/奶油内页50张 种草备用', type: 'expense', tags: ['davinci/personal/奶油内页50张'], price: null, isWishlist: true },
-    { raw: '工资 8000', type: 'income', tags: [], price: 8000 },
-    { raw: '午饭 28', type: 'expense', tags: [], price: 28 },
+    { raw: '#星巴克/馥芮白 @星巴克/西湖文化广场 32', tags:['星巴克/馥芮白'], places:['星巴克/西湖文化广场'], price:32, type:'expense' },
+    { raw: '#星巴克/馥芮白 38 换了大杯', tags:['星巴克/馥芮白'], places:[], price:38, type:'expense' },
+    { raw: '#davinci/personal/奶油内页50张 @淘宝', tags:['davinci/personal/奶油内页50张'], places:['淘宝'], price:null, type:'expense', isWishlist:true },
+    { raw: '工资 8000', tags:[], places:[], price:8000, type:'income' },
+    { raw: '午饭 28 @公司楼下', tags:[], places:['公司楼下'], price:28, type:'expense' },
   ];
-
-  const entries = seeds.map((s, i) => ({
+  DB.entries = seeds.map((s, i) => ({
     id: genId(),
-    timestamp: new Date(y, mo, 5 + i * 3, 10 + i, 0).toISOString(),
-    raw: s.raw,
-    price: s.price !== undefined ? s.price : parseEntry(s.raw).price,
-    tags: s.tags,
-    note: parseEntry(s.raw).note,
-    type: s.type || 'expense',
-    isWishlist: s.isWishlist || false,
+    timestamp: new Date(y, mo, 3 + i*3, 10+i, 0).toISOString(),
+    raw: s.raw, price: s.price, tags: s.tags, places: s.places,
+    note: parseEntry(s.raw).note, type: s.type, isWishlist: s.isWishlist || false,
   }));
-
-  DB.entries = entries;
-
-  const allTags = [...new Set(seeds.flatMap(s => s.tags))];
-  DB.tags = allTags.map(path => ({ id: genId(), path }));
+  const allTags   = [...new Set(seeds.flatMap(s => s.tags))];
+  const allPlaces = [...new Set(seeds.flatMap(s => s.places))];
+  DB.tags   = allTags.map(path => ({ id: genId(), path }));
+  DB.places = allPlaces.map(path => ({ id: genId(), path }));
 }
 
-// ─── Init ────────────────────────────────────────────────────────────────────
+// ─── Init ─────────────────────────────────────────────────────────────────────
 seedIfEmpty();
 renderTimeline();
+// init lucide for static elements
+window.addEventListener('load', () => lucide.createIcons());
